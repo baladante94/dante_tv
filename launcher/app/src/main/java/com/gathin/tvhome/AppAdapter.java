@@ -54,6 +54,9 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
 
         /** OK on a tile: run {@code launch} now or after a short flourish. */
         void onTileClicked(int position, Runnable launch);
+
+        /** Hold OK on a tile: its options (Move, App info). */
+        void onTileLongPressed(int position);
     }
 
     static final class Entry {
@@ -159,6 +162,12 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
     /** Calmer motion for weak GPUs (config.xml, reduced_motion): no overshoot, shorter fades. */
     private final boolean reducedMotion;
     private final List<Entry> items = new ArrayList<>();
+    private static final String ORDER = "app_order";
+    /** The owner's own order (Move), as tile keys; empty until they first move a tile. The dock is its first row. */
+    private List<String> savedOrder = Collections.emptyList();
+    /** Moving a tile: no Jump back in row, so the grid on screen is exactly the order being edited. */
+    private boolean reordering;
+    private String movingKey;
     /** Labels over the rows that start a section (Jump back in, All apps), by position. */
     private final Map<Integer, String> rowLabels = new HashMap<>();
 
@@ -188,6 +197,9 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         Map<String, Cards.Card> cardByPkg = new HashMap<>();
         for (Cards.Card c : cards) cardByPkg.put(c.pkg, c);
         List<Entry> fresh = new ArrayList<>();
+        // Some system apps declare two leanback entry points under one name (Sony's Timers & Clock on the
+        // BRAVIA VU31), which would show as two identical tiles: keep the first per package and label.
+        Set<String> seen = new HashSet<>();
         for (ResolveInfo ri : found) {
             if (ri.activityInfo == null) continue;
             String pkg = ri.activityInfo.packageName;
@@ -196,6 +208,7 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
             Cards.Card card = cardByPkg.get(pkg);
             if (card != null && !card.component.equals(component)) continue;   // the card stands in for this tile
             if (card != null) {
+                if (!seen.add(pkg + '\n' + card.label)) continue;
                 fresh.add(new Entry(Entry.CARD, card.label, component, loadBanner(pm, ri), ri.loadIcon(pm),
                         card.caption, card.accent));
                 continue;
@@ -209,9 +222,19 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
                         loadBanner(pm, ri), ri.loadIcon(pm));
                 built.put(key, cached);
             }
+            if (!seen.add(pkg + '\n' + cached.label)) continue;
             fresh.add(cached);
         }
+        String saved = ctx.getSharedPreferences(ORDER, Context.MODE_PRIVATE).getString("keys", "");
+        savedOrder = saved.isEmpty() ? Collections.emptyList() : Arrays.asList(saved.split("\n"));
         Collections.sort(fresh, (a, b) -> {
+            // The owner's own order first; tiles it does not know (new installs) follow by the usual rule.
+            int sa = savedOrder.indexOf(a.key), sb = savedOrder.indexOf(b.key);
+            if (sa >= 0 || sb >= 0) {
+                if (sa < 0) return 1;
+                if (sb < 0) return -1;
+                return Integer.compare(sa, sb);
+            }
             int fa = favourites.indexOf(a.pkg), fb = favourites.indexOf(b.pkg);
             if (fa >= 0 || fb >= 0) {
                 if (fa < 0) return 1;
@@ -226,17 +249,19 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         // Sections after the dock, each padded to whole rows so every row lines up with the dock:
         // Jump back in (apps opened recently), then all apps.
         // A dock app opened recently appears again as a copy; any other app moves up out of All apps.
+        int dockEnd = Math.min(dockSize, fresh.size());
+        Set<String> docked = new HashSet<>();
+        for (int i = 0; i < dockEnd; i++) docked.add(fresh.get(i).pkg);
         List<Entry> recent = new ArrayList<>();
-        for (Entry e : recentApps(fresh)) {
-            if (favourites.contains(e.pkg)) {
+        for (Entry e : reordering ? Collections.<Entry>emptyList() : recentApps(fresh)) {
+            if (docked.contains(e.pkg)) {
                 recent.add(new Entry(e));
             } else {
                 fresh.remove(e);
                 recent.add(e);
             }
         }
-        int at = 0;
-        while (at < fresh.size() && favourites.contains(fresh.get(at).pkg)) at++;
+        int at = dockEnd;
         rowLabels.clear();
         List<Entry> sections = new ArrayList<>();
         addSection(sections, at, ctx.getString(R.string.section_recent), recent);
@@ -252,6 +277,51 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         items.clear();
         items.addAll(fresh);
         notifyDataSetChanged();
+    }
+
+    /** Move mode on or off; takes effect at the next reload(). */
+    void setReordering(boolean on, String key) {
+        reordering = on;
+        movingKey = on ? key : null;
+    }
+
+    boolean rowLabelsHidden() {
+        return reordering;
+    }
+
+    /** Tiles that can move: everything but the Default-home tile, which stays last. */
+    int movableCount() {
+        int n = items.size();
+        return n > 0 && items.get(n - 1).kind == Entry.HOME_SETTINGS ? n - 1 : n;
+    }
+
+    /** Moves one tile; the others shift by one. Stable ids keep the moved tile's view, and its focus. */
+    void move(int from, int to) {
+        if (from == to || from < 0 || to < 0 || from >= movableCount() || to >= movableCount()) return;
+        items.add(to, items.remove(from));
+        notifyItemMoved(from, to);
+        // The dock hides names by position: rebind the tiles whose side of the dock edge changed.
+        if (from < dockSize || to < dockSize) {
+            int lo = Math.min(from, to), hi = Math.max(from, to);
+            notifyItemRangeChanged(lo, hi - lo + 1);
+        }
+    }
+
+    /** Saves the order on screen; the dock is its first row from now on. */
+    void saveOrder() {
+        StringBuilder keys = new StringBuilder();
+        for (int i = 0; i < movableCount(); i++) {
+            Entry e = items.get(i);
+            if (e.kind != Entry.APP && e.kind != Entry.CARD) continue;
+            if (keys.length() > 0) keys.append('\n');
+            keys.append(e.key);
+        }
+        ctx.getSharedPreferences(ORDER, Context.MODE_PRIVATE).edit().putString("keys", keys.toString()).apply();
+    }
+
+    /** Back to the dock_apps order and alphabetical grid. */
+    void resetOrder() {
+        ctx.getSharedPreferences(ORDER, Context.MODE_PRIVATE).edit().remove("keys").apply();
     }
 
     /** The label over the row starting at this position, or null. */
@@ -367,9 +437,11 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         }
         h.card.setOnClickListener(v -> listener.onTileClicked(h.getBindingAdapterPosition(), () -> launch(e)));
         h.card.setOnLongClickListener(v -> {
-            openAppInfo(e.pkg);
+            listener.onTileLongPressed(h.getBindingAdapterPosition());
             return true;
         });
+        // Moving a tile: it stays bright, the rest dim.
+        h.itemView.setAlpha(reordering && !e.key.equals(movingKey) ? 0.4f : 1f);
     }
 
     /** Every app tile, dock first, for the All Apps overlay; the Default-home tile is left out. */

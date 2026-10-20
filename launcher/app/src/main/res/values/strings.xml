@@ -80,7 +80,7 @@
     <string name="optimize_nothing">Already optimized</string>
     <string name="optimize_free_now">%1$s of %2$s free</string>
     <string name="optimize_service_name">Dante TV Optimize</string>
-    <string name="optimize_service_description">Lets the home screen\'s Optimize button force-stop apps running in the background to free memory. It only acts on the TV Settings app, and only while Optimize is running.</string>
+    <string name="optimize_service_description">Lets the home screen\'s Optimize button force-stop apps running in the background to free memory. It only acts on the TV Settings and Picture settings apps, and only while Optimize or MEMC is running.</string>
     <string name="optimize_title">Optimizing</string>
     <string name="optimize_progress">Closing %1$s  (%2$d of %3$d)</string>
     <string name="optimize_enable">Turn on \"Dante TV Optimize\" in Accessibility to use Optimize</string>
@@ -106,4 +106,26 @@
     <string name="tab_explore">Explore</string>
     <string name="tab_movies">Movies</string>
     <string name="tab_shows">Shows</string>
+    <string name="side_title">Quick settings</string>
+    <string name="side_picture">Picture</string>
+    <string name="side_sound">Sound</string>
+    <string name="side_all_settings">All settings</string>
+    <string name="memc_changing">Changing MEMC to %1$s…</string>
+    <string name="memc_failed">Couldn\'t change MEMC. Opening Picture settings.</string>
+    <string name="move_app">Move</string>
+    <string name="app_info">App info</string>
+    <string name="moving_app">Moving %1$s: arrows move it, OK puts it down</string>
+    <string name="order_saved">App order saved</string>
+    <string name="reset_order">Reset app order</string>
+    <string name="order_reset">App order reset</string>
+    <string name="shelf_setup">Top Shelf setup</string>
+    <string name="shelf_setup_steps">The Top Shelf shows what is trending on Netflix, Apple TV and Crunchyroll in your country. It needs your own free TMDB key.\n\n1. On your phone, sign up at themoviedb.org\n2. Settings → API → Create → Personal use\n3. Scan the code and paste the API Read Access Token (or API Key)</string>
+    <string name="shelf_key_set">Key saved. The Top Shelf is on.</string>
+    <string name="shelf_key_none">No key yet. The Top Shelf is off.</string>
+    <string name="shelf_key_checking">Checking the key with TMDB…</string>
+    <string name="shelf_key_bad">TMDB did not accept that key. Try again.</string>
+    <string name="shelf_region">Country: %1$s (from the TV\'s settings)</string>
+    <string name="setup_done">Done</string>
+    <string name="setup_remove">Remove key</string>
+    <string name="tmdb_credit">This product uses the TMDB API but is not endorsed or certified by TMDB.</string>
 </resources>

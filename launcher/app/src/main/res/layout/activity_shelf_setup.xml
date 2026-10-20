@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Top Shelf setup: how to get a TMDB key, and a QR code that opens a page on the TV to paste it from a phone. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="horizontal"
+    android:gravity="center_vertical"
+    android:background="#FF0B0D14"
+    android:paddingStart="96dp"
+    android:paddingEnd="96dp">
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/shelf_setup"
+            android:textColor="#FFFFFFFF"
+            android:textSize="34sp"
+            android:fontFamily="@font/outfit_light" />
+
+        <TextView
+            android:id="@+id/setupStatus"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:textColor="#FF8FD19E"
+            android:textSize="16sp"
+            android:fontFamily="@font/outfit_medium" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="22dp"
+            android:text="@string/shelf_setup_steps"
+            android:lineSpacingExtra="6sp"
+            android:textColor="#E6FFFFFF"
+            android:textSize="17sp"
+            android:fontFamily="@font/outfit_regular" />
+
+        <TextView
+            android:id="@+id/setupRegion"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:textColor="#99FFFFFF"
+            android:textSize="14sp"
+            android:fontFamily="@font/outfit_regular" />
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="22dp"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/setupDone"
+                style="@style/TopButton"
+                android:layout_marginStart="0dp"
+                android:text="@string/setup_done" />
+
+            <TextView
+                android:id="@+id/setupRemove"
+                style="@style/TopButton"
+                android:text="@string/setup_remove" />
+        </LinearLayout>
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="28dp"
+            android:text="@string/tmdb_credit"
+            android:textColor="#66FFFFFF"
+            android:textSize="12sp"
+            android:fontFamily="@font/outfit_regular" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="48dp"
+        android:gravity="center_horizontal"
+        android:orientation="vertical">
+
+        <ImageView
+            android:id="@+id/setupQr"
+            android:layout_width="260dp"
+            android:layout_height="260dp"
+            android:background="#FFFFFFFF"
+            android:padding="12dp"
+            android:contentDescription="@null" />
+
+        <TextView
+            android:id="@+id/setupUrl"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:textColor="#CCFFFFFF"
+            android:textSize="14sp"
+            android:fontFamily="@font/outfit_medium" />
+    </LinearLayout>
+</LinearLayout>

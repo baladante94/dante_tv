@@ -110,6 +110,10 @@
         </service>
 
         <!-- The remote's Input button (KEYCODE_TV) opens the input switcher; see InputKeyService. -->
+        <activity
+            android:name=".ShelfSetupActivity"
+            android:exported="false"
+            android:theme="@style/Theme.TvHome" />
         <receiver
             android:name=".SleepReceiver"
             android:exported="false" />

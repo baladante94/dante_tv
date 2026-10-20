@@ -58,8 +58,10 @@ final class Config {
     final int skyIntensity;
     /** Full-screen picture behind the launcher, or null for the plain colour. */
     final File wallpaper;
-    /** TMDB API read token for the trending rows; empty leaves them off. Only ever set in a theme's config.json. */
+    /** Legacy: a TMDB token in a theme's config.json, moved into the launcher's own storage on first start. */
     final String tmdbToken;
+    /** Two-letter country for the Top Shelf; empty follows the TV (ShelfKey.region). */
+    final String region;
     /** Whether the overlay file was present and parsed. */
     final boolean overlayApplied;
 
@@ -68,7 +70,7 @@ final class Config {
                    int columns, int rowsBelowDock, boolean animations, boolean advancedEffects,
                    boolean shamsiDate, boolean moduleCards, boolean reducedMotion, String vpnApp,
                    boolean showHomeSettingsShortcut, int backgroundColor, int skyIntensity,
-                   File wallpaper, String tmdbToken, boolean overlayApplied) {
+                   File wallpaper, String tmdbToken, String region, boolean overlayApplied) {
         this.dockApps = Collections.unmodifiableList(dockApps);
         this.hiddenApps = Collections.unmodifiableList(hiddenApps);
         this.liveTvPackage = liveTvPackage;
@@ -89,6 +91,7 @@ final class Config {
         this.skyIntensity = skyIntensity;
         this.wallpaper = wallpaper;
         this.tmdbToken = tmdbToken;
+        this.region = region;
         this.overlayApplied = overlayApplied;
     }
 
@@ -118,6 +121,7 @@ final class Config {
         int background = 0xFF000000;
         int skyIntensity = res.getInteger(R.integer.sky_intensity);
         String tmdbToken = "";
+        String region = "";
         boolean applied = false;
 
         File dir = dir(ctx);
@@ -144,6 +148,7 @@ final class Config {
             background = color(json, "background_color", background);
             skyIntensity = integer(json, "sky_intensity", skyIntensity, 0, 100);
             tmdbToken = string(json, "tmdb_token", tmdbToken);
+            region = string(json, "region", region);
         }
         // A theme push or reset invalidates choices made on the TV. On first use, remember the
         // current theme without clearing choices from an older launcher version.
@@ -161,7 +166,7 @@ final class Config {
         return new Config(dock, hidden, liveTv, liveTvAction, panelService, panelAction, inputAction,
                 Math.max(1, columns), Math.max(0, rowsBelow), animations, advancedEffects,
                 shamsi, moduleCards, reducedMotion, vpn, homeSettings, background,
-                Math.max(0, Math.min(100, skyIntensity)), wallpaper, tmdbToken, applied);
+                Math.max(0, Math.min(100, skyIntensity)), wallpaper, tmdbToken, region, applied);
     }
 
     private static void syncThemeChoices(SharedPreferences choices, File dir, File config) {

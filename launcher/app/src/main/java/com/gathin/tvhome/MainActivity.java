@@ -75,6 +75,8 @@ import java.util.Set;
 public class MainActivity extends Activity implements AppAdapter.TileListener, TopShelf.Host {
 
     private static final int LAUNCHER_SETTINGS_REQUEST = 42;
+    /** Started with this extra (the side panel's Optimize row): run Optimize once Home is up. */
+    static final String EXTRA_WIFI_JOIN = "com.gathin.tvhome.WIFI_JOIN";
     /** Tiles per row and dock slots (res/values/config.xml, columns). Set in onCreate. */
     static int COLUMNS = 4;
     private boolean rtlAppGrid;
@@ -87,8 +89,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
 
     private AppAdapter adapter;
     private Launchpad launchpad;
-    /** TMDB key for the trending rows (a theme's config.json, tmdb_token); empty turns them off. */
+    /** The owner's TMDB key (Top Shelf setup screen, ShelfKey); empty leaves the Top Shelf off. */
     private String tmdbToken = "";
+    private String region = "US";
     private TopShelf shelf;
     private boolean safeMode;
     private RecyclerView grid;
@@ -266,7 +269,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
         }
         grid.setAdapter(adapter(cfg));
         launchpad = new Launchpad(this, root, adapter, animations);
-        tmdbToken = safeMode ? "" : cfg.tmdbToken;
+        // A key from an older theme file moves into the launcher's own storage once.
+        if (ShelfKey.token(this).isEmpty() && !cfg.tmdbToken.isEmpty()) ShelfKey.save(this, cfg.tmdbToken);
+        tmdbToken = safeMode ? "" : ShelfKey.token(this);
+        region = ShelfKey.region(this, cfg.region);
         if (!tmdbToken.isEmpty()) {
             // Under the menu's scrim and panel (scrim is not looked up yet, so find it here).
             shelf = new TopShelf(this, root, root.indexOfChild(findViewById(R.id.scrim)), this, animations);
@@ -276,6 +282,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
         if (safeMode) Toast.makeText(this, R.string.safe_mode, Toast.LENGTH_LONG).show();
         // Running a few minutes without crashing ends safe mode for the next start.
         handler.postDelayed(() -> Watchdog.clear(this), Watchdog.STABLE_MS);
+        if (getIntent() != null && getIntent().hasExtra(EXTRA_WIFI_JOIN)) {
+            String ssid = getIntent().getStringExtra(EXTRA_WIFI_JOIN);
+            handler.postDelayed(() -> askWifiPassword(ssid), 600);
+        }
 
         // tvOS layout: push the dock row towards the bottom of the screen, leaving room for
         // rows_below_dock grid rows under it; the rest of the grid stays below until you press Down.
@@ -353,6 +363,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
+        if (intent != null && intent.hasExtra(EXTRA_WIFI_JOIN)) {
+            String ssid = intent.getStringExtra(EXTRA_WIFI_JOIN);
+            handler.postDelayed(() -> askWifiPassword(ssid), 300);
+            return;
+        }
         if (intent == null || !intent.hasCategory(Intent.CATEGORY_HOME)) return;
         grid.scrollToPosition(0);
         launchpad.close(false);
@@ -386,7 +401,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
         updateWifiLabel();
         updateInputsButton();
         // New trending rows arrive in the background; show them the next time Home is not in use.
-        if (shelf != null) Trending.refreshIfStale(this, tmdbToken, () -> runOnUiThread(() -> {
+        // A refresh can finish while another Home instance is on screen (Home restarts after setup): an empty
+        // shelf rereads what is on disk each time Home comes back.
+        if (shelf != null && !shelf.hasItems()) {
+            shelf.setItems(Trending.cached(this));
+            prefetchShelf();
+        }
+        if (shelf != null) Trending.refreshIfStale(this, tmdbToken, region, () -> runOnUiThread(() -> {
             shelf.setItems(Trending.cached(this));
             prefetchShelf();
             if (lastFocused < COLUMNS) shelf.showFor(adapter.pkgAt(lastFocused));
@@ -467,6 +488,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
     @Override
     protected void onPause() {
         super.onPause();
+        if (moving >= 0) endMove();
         stopAmbientAnimation();
         heroName.animate().cancel();
         ambient.animate().cancel();
@@ -550,6 +572,87 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
     @Override
     public void onTileClicked(int position, Runnable launch) {
         launch.run();
+    }
+
+    // ---- rearranging -------------------------------------------------------------------------------
+
+    /** The tile being moved, by position; -1 when not moving. */
+    private int moving = -1;
+
+    /** Hold OK on a tile: Move it, or open its App info. */
+    @Override
+    public void onTileLongPressed(int position) {
+        if (moving >= 0 || position < 0 || adapter.isSpacer(position) || position >= adapter.movableCount()) return;
+        RecyclerView.ViewHolder vh = grid.findViewHolderForAdapterPosition(position);
+        if (vh == null) return;
+        View card = vh.itemView.findViewById(R.id.card);
+        final String key = adapter.keyAt(position);
+        final String pkg = adapter.pkgAt(position);
+        View panel = getLayoutInflater().inflate(R.layout.popup_inputs, root, false);
+        LinearLayout rows = panel.findViewById(R.id.rows);
+        PopupWindow popup = glassPopup(panel, (int) (220 * density));
+        addSettingsMenuRow(rows, popup, R.string.move_app, () -> startMove(key));
+        addSettingsMenuRow(rows, popup, R.string.app_info, () -> adapter.openAppInfo(pkg));
+        // Above the tile: the dock sits at the bottom of the screen, so a menu below it would be cut off.
+        panel.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
+        popup.showAsDropDown(card, 0, -(card.getHeight() + panel.getMeasuredHeight() + (int) (12 * density)));
+        rows.getChildAt(0).requestFocus();
+    }
+
+    private void startMove(String key) {
+        // Without Jump back in, the grid on screen is exactly the order being edited.
+        key = key.replace("#recent", "");
+        if (shelf != null) shelf.setShown(false);
+        adapter.setReordering(true, key);
+        reloadTiles();
+        final String k = key;
+        grid.post(() -> {
+            moving = adapter.positionOf(k);
+            if (moving < 0) {
+                endMove();
+                return;
+            }
+            focusTile(moving);
+            Toast.makeText(this, getString(R.string.moving_app, adapter.labelAt(moving)), Toast.LENGTH_LONG).show();
+        });
+    }
+
+    /** While moving, the arrows carry the tile (a row up or down, a place left or right); OK or Back puts it down. */
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        if (moving < 0) return super.dispatchKeyEvent(event);
+        int code = event.getKeyCode();
+        boolean drop = code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER || code == KeyEvent.KEYCODE_BACK;
+        if (drop) {
+            if (event.getAction() == KeyEvent.ACTION_UP) endMove();
+            return true;
+        }
+        if (event.getAction() != KeyEvent.ACTION_DOWN) return true;
+        int count = adapter.movableCount(), target = moving;
+        if (code == KeyEvent.KEYCODE_DPAD_LEFT) target = moving - 1;
+        else if (code == KeyEvent.KEYCODE_DPAD_RIGHT) target = moving + 1;
+        else if (code == KeyEvent.KEYCODE_DPAD_UP) target = moving - COLUMNS;
+        else if (code == KeyEvent.KEYCODE_DPAD_DOWN) target = Math.min(moving + COLUMNS, count - 1);
+        else return true;
+        if (target < 0 || target >= count || target == moving) return true;
+        adapter.move(moving, target);
+        moving = target;
+        final int at = target;
+        grid.post(() -> focusTile(at));
+        return true;
+    }
+
+    private void endMove() {
+        if (moving < 0 && !adapter.rowLabelsHidden()) return;
+        int at = moving;
+        moving = -1;
+        adapter.saveOrder();
+        lastFocusedKey = adapter.keyAt(Math.max(0, at));
+        lastFocused = Math.max(0, at);
+        adapter.setReordering(false, null);
+        reloadTiles();
+        restoreFocus();
+        Toast.makeText(this, R.string.order_saved, Toast.LENGTH_SHORT).show();
     }
 
     private void prefetchShelf() {
@@ -1102,11 +1205,17 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
                         tunerIsHw = hw;
                     }
                 }
-                if (!info.isPassthroughInput()) continue;
+                // Inputs hidden in the TV's Settings > Inputs stay out of the menu too.
+                if (!info.isPassthroughInput() || info.isHidden(this)) continue;
                 CharSequence l = info.loadLabel(this);
                 String label = l == null ? info.getId() : l.toString();
                 boolean hdmi = info.getType() == TvInputInfo.TYPE_HDMI;
                 if (hdmi && !label.toUpperCase(Locale.ROOT).contains("HDMI")) label = "HDMI " + label;
+                // The name given in Settings > Inputs (e.g. "Fire TV") goes first, the port after it.
+                CharSequence custom = info.loadCustomLabel(this);
+                if (custom != null && custom.length() > 0 && !custom.toString().equals(label)) {
+                    label = custom + " \u00B7 " + label;
+                }
                 final String id = info.getId();
                 int state = hdmi && hdmiStateBogus ? -1 : tim.getInputState(id);
                 if (!hdmi && rows.getChildCount() > 0 && !sawNonHdmi) addSeparator(rows);
@@ -1283,12 +1392,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
                 () -> open(systemIntent(Settings.ACTION_WIFI_SETTINGS)));
     }
 
-    private static String unquote(String ssid) {
+    static String unquote(String ssid) {
         return ssid == null ? "" : ssid.replace("\"", "").trim();
     }
 
     /** 0 open, 1 WEP, 2 WPA/WPA2 personal, 3 WPA3 personal only, 4 enterprise (needs a sign-in). */
-    private static int wifiSecurity(ScanResult r) {
+    static int wifiSecurity(ScanResult r) {
         String c = r.capabilities == null ? "" : r.capabilities;
         if (c.contains("EAP")) return 4;
         if (c.contains("SAE") && !c.contains("PSK")) return 3;
@@ -1315,6 +1424,17 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
             return;
         }
         askWifiPassword(wm, r, security);
+    }
+
+    /** The side panel can't take typing (an overlay gets no keyboard), so it hands secured networks over here. */
+    private void askWifiPassword(String ssid) {
+        WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+        if (wm == null || ssid == null) return;
+        ScanResult best = null;
+        for (ScanResult r : wm.getScanResults()) {
+            if (ssid.equals(r.SSID) && (best == null || r.level > best.level)) best = r;
+        }
+        if (best != null) askWifiPassword(wm, best, wifiSecurity(best));
     }
 
     private void askWifiPassword(WifiManager wm, ScanResult r, int security) {
@@ -1583,27 +1703,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
             open(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
             return;
         }
-        Set<String> keep = new HashSet<>(Arrays.asList(getPackageName(), liveTvPkg,
-                "com.android.vending", "com.android.tv.settings"));
-        String ime = Settings.Secure.getString(getContentResolver(), Settings.Secure.DEFAULT_INPUT_METHOD);
-        if (ime != null) keep.add(ime.split("/")[0]);
-        String a11y = Settings.Secure.getString(getContentResolver(), Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
-        if (a11y != null) for (String svc : a11y.split(":")) keep.add(svc.split("/")[0]);
-        List<String> pkgs = new ArrayList<>(), labels = new ArrayList<>();
-        for (AppAdapter.Entry e : adapter.apps()) {
-            if (keep.contains(e.pkg) || pkgs.contains(e.pkg)) continue;
-            try {
-                ApplicationInfo ai = getPackageManager().getApplicationInfo(e.pkg, 0);
-                boolean core = (ai.flags & ApplicationInfo.FLAG_SYSTEM) != 0
-                        && (ai.flags & ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0;
-                // FLAG_STOPPED: never run since its last force stop, so nothing of it is in memory.
-                if (core || (ai.flags & ApplicationInfo.FLAG_STOPPED) != 0) continue;
-            } catch (android.content.pm.PackageManager.NameNotFoundException ex) {
-                continue;
-            }
-            pkgs.add(e.pkg);
-            labels.add(e.label);
-        }
+        Map<String, String> apps = new java.util.LinkedHashMap<>();
+        for (AppAdapter.Entry e : adapter.apps()) if (!apps.containsKey(e.pkg)) apps.put(e.pkg, e.label);
+        Map<String, String> targets = OptimizeService.targets(this, apps, liveTvPkg);
+        List<String> pkgs = new ArrayList<>(targets.keySet()), labels = new ArrayList<>(targets.values());
         android.app.ActivityManager am = getSystemService(android.app.ActivityManager.class);
         android.app.ActivityManager.MemoryInfo before = new android.app.ActivityManager.MemoryInfo();
         am.getMemoryInfo(before);
@@ -1612,7 +1715,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
             return;
         }
         optimizing = true;
-        OptimizeService.run(pkgs, labels, stopped -> handler.postDelayed(() -> {
+        OptimizeService.run(pkgs, labels, true, stopped -> handler.postDelayed(() -> {
             optimizing = false;
             if (isFinishing()) return;
             android.app.ActivityManager.MemoryInfo after = new android.app.ActivityManager.MemoryInfo();
@@ -1654,7 +1757,14 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
         PopupWindow popup = glassPopup(panel, (int) (200 * density));
         addSettingsMenuRow(rows, popup, R.string.launcher_settings, () -> startActivityForResult(
                 new Intent(this, LauncherSettingsActivity.class), LAUNCHER_SETTINGS_REQUEST));
+        addSettingsMenuRow(rows, popup, R.string.shelf_setup, () -> startActivityForResult(
+                new Intent(this, ShelfSetupActivity.class), LAUNCHER_SETTINGS_REQUEST));
         if (moduleCards) addSettingsMenuRow(rows, popup, R.string.module_cards, this::showModuleCards);
+        addSettingsMenuRow(rows, popup, R.string.reset_order, () -> {
+            adapter.resetOrder();
+            reloadApps(false);
+            Toast.makeText(this, R.string.order_reset, Toast.LENGTH_SHORT).show();
+        });
         panel.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
         popup.setWidth(Math.max((int) (200 * density), panel.getMeasuredWidth()));
         dropIn(popup, panel, anchor);

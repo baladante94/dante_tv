@@ -21,8 +21,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Trending rows from the services on this TV: Netflix's own weekly Top 10 for India (top10.netflix.com), and
- * what is popular on Apple TV and Crunchyroll in India (TMDB, which gets availability from JustWatch).
+ * Trending rows from the services on this TV: Netflix's own weekly Top 10 for the TV's country
+ * (top10.netflix.com), and what is popular on Apple TV and Crunchyroll there (TMDB, availability from JustWatch).
  * Fetched in the background at most every few hours and kept on disk, so Home never waits for the network.
  */
 final class Trending {
@@ -46,7 +46,6 @@ final class Trending {
 
     private static final String NETFLIX = "com.netflix.ninja", APPLE = "com.apple.atve.androidtv.appletv",
             CRUNCHYROLL = "com.crunchyroll.crunchyroid";
-    private static final String REGION = "IN";
     /** Shows and films kept per service, so the Movies and Shows tabs have enough of each. */
     private static final int PER_KIND = 6;
     private static final long TMDB_EVERY_MS = 12 * 60 * 60_000L, NETFLIX_EVERY_MS = 3 * 24 * 60 * 60_000L;
@@ -84,14 +83,19 @@ final class Trending {
         return out;
     }
 
+    /** Forgets the rows on disk, so the next refresh fetches everything (a new key or region). */
+    static void reset(Context ctx) {
+        new File(dir(ctx), "trending.json").delete();
+    }
+
     /** Refreshes in the background when the rows are old; {@code done} runs on that thread if anything changed. */
-    static void refreshIfStale(Context ctx, String token, Runnable done) {
+    static void refreshIfStale(Context ctx, String token, String region, Runnable done) {
         if (token == null || token.isEmpty() || running) return;
         final Context app = ctx.getApplicationContext();
         running = true;
         new Thread(() -> {
             try {
-                if (refresh(app, token)) done.run();
+                if (refresh(app, token, region)) done.run();
             } catch (Exception e) {
                 android.util.Log.w("TvHome.Trending", "refresh failed", e);
             } finally {
@@ -100,24 +104,27 @@ final class Trending {
         }, "trending").start();
     }
 
-    private static boolean refresh(Context ctx, String token) throws Exception {
+    private static boolean refresh(Context ctx, String token, String region) throws Exception {
         File file = new File(dir(ctx), "trending.json");
         JSONObject root = file.isFile()
                 ? new JSONObject(new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8)) : new JSONObject();
         long now = System.currentTimeMillis();
         boolean changed = false;
-        if (root.optInt("v") != 3) root = new JSONObject().put("v", 3);   // older cache without posters or film/series split
+        // An older cache (no posters or film/series split) or another country starts over.
+        if (root.optInt("v") != 3 || !region.equals(root.optString("region"))) {
+            root = new JSONObject().put("v", 3).put("region", region);
+        }
         loadGenres(token);
         if (now - root.optLong("netflixAt") > NETFLIX_EVERY_MS && installed(ctx, NETFLIX)) {
-            JSONArray rows = netflix(ctx, token);
+            JSONArray rows = netflix(ctx, token, region);
             if (rows.length() > 0) {
                 root.put("netflix", rows).put("netflixAt", now);
                 changed = true;
             }
         }
         if (now - root.optLong("tmdbAt") > TMDB_EVERY_MS) {
-            if (installed(ctx, APPLE)) root.put("apple", popular(ctx, token, 350, "Popular on Apple TV", APPLE));
-            if (installed(ctx, CRUNCHYROLL)) root.put("crunchyroll", popular(ctx, token, 283, "Popular on Crunchyroll", CRUNCHYROLL));
+            if (installed(ctx, APPLE)) root.put("apple", popular(ctx, token, region, 350, "Popular on Apple TV", APPLE));
+            if (installed(ctx, CRUNCHYROLL)) root.put("crunchyroll", popular(ctx, token, region, 283, "Popular on Crunchyroll", CRUNCHYROLL));
             root.put("tmdbAt", now);
             changed = true;
         }
@@ -131,17 +138,17 @@ final class Trending {
     }
 
     /**
-     * Netflix's weekly Top 10 for India: the published file is sorted by country with the newest week first, so
-     * reading stops as soon as India's latest week has gone by, about a third of the way into the file.
+     * Netflix's weekly Top 10 for one country: the published file is sorted by country with the newest week first,
+     * so reading stops as soon as that country's latest week has gone by.
      */
-    private static JSONArray netflix(Context ctx, String token) throws Exception {
+    private static JSONArray netflix(Context ctx, String token, String region) throws Exception {
         List<String> films = new ArrayList<>(), shows = new ArrayList<>();
         HttpURLConnection c = open(TOP10, null);
         try (BufferedReader in = new BufferedReader(new InputStreamReader(c.getInputStream(), StandardCharsets.UTF_8))) {
             String line, week = null;
             while ((line = in.readLine()) != null) {
                 String[] f = line.split("\t");
-                if (f.length < 6 || !REGION.equals(f[1])) {
+                if (f.length < 6 || !region.equals(f[1])) {
                     if (week != null) break;
                     continue;
                 }
@@ -155,24 +162,25 @@ final class Trending {
         JSONArray out = new JSONArray();
         int tv = 0, mv = 0;
         for (int i = 0; i < 10; i++) {
-            if (i < shows.size() && tv < PER_KIND && addSearched(ctx, token, out, shows.get(i), true, "Top 10 on Netflix", NETFLIX)) tv++;
-            if (i < films.size() && mv < PER_KIND && addSearched(ctx, token, out, films.get(i), false, "Top 10 on Netflix", NETFLIX)) mv++;
+            if (i < shows.size() && tv < PER_KIND && addSearched(ctx, token, region, out, shows.get(i), true, "Top 10 on Netflix", NETFLIX)) tv++;
+            if (i < films.size() && mv < PER_KIND && addSearched(ctx, token, region, out, films.get(i), false, "Top 10 on Netflix", NETFLIX)) mv++;
         }
         return out;
     }
 
-    private static boolean addSearched(Context ctx, String token, JSONArray out, String title, boolean tv, String section,
-                                       String pkg) throws Exception {
-        JSONObject r = tmdb(token, "/search/" + (tv ? "tv" : "movie") + "?region=" + REGION + "&query="
+    private static boolean addSearched(Context ctx, String token, String region, JSONArray out, String title, boolean tv,
+                                       String section, String pkg) throws Exception {
+        JSONObject r = tmdb(token, "/search/" + (tv ? "tv" : "movie") + "?region=" + region + "&query="
                 + URLEncoder.encode(title, "UTF-8"));
         JSONArray results = r.optJSONArray("results");
         if (results == null || results.length() == 0) return false;
         return add(ctx, out, results.getJSONObject(0), title, section, pkg, tv);
     }
 
-    /** The most popular series and films on one service in India this week, interleaved. */
-    private static JSONArray popular(Context ctx, String token, int provider, String section, String pkg) throws Exception {
-        String q = "?watch_region=" + REGION + "&with_watch_providers=" + provider + "&sort_by=popularity.desc";
+    /** The most popular series and films on one service in the country this week, interleaved. */
+    private static JSONArray popular(Context ctx, String token, String region, int provider, String section, String pkg)
+            throws Exception {
+        String q = "?watch_region=" + region + "&with_watch_providers=" + provider + "&sort_by=popularity.desc";
         JSONArray tv = tmdb(token, "/discover/tv" + q).optJSONArray("results");
         JSONArray mv = tmdb(token, "/discover/movie" + q).optJSONArray("results");
         JSONArray out = new JSONArray();
@@ -248,8 +256,24 @@ final class Trending {
         }
     }
 
+    /** True when TMDB accepts this key (the setup screen checks before keeping it). */
+    static boolean check(String token) {
+        try {
+            return tmdb(token, "/configuration").has("images");
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
+     * TMDB accepts two kinds of key: the API Read Access Token (sent as a bearer header) and the short API Key
+     * (sent as api_key in the address). api.tmdb.org, because some Indian ISPs block api.themoviedb.org.
+     */
     private static JSONObject tmdb(String token, String path) throws Exception {
-        HttpURLConnection c = open("https://api.tmdb.org/3" + path, token);
+        boolean bearer = token.startsWith("eyJ");
+        String url = "https://api.tmdb.org/3" + path
+                + (bearer ? "" : (path.contains("?") ? "&" : "?") + "api_key=" + URLEncoder.encode(token, "UTF-8"));
+        HttpURLConnection c = open(url, bearer ? token : null);
         try (InputStream in = c.getInputStream()) {
             return new JSONObject(new String(readAll(in), StandardCharsets.UTF_8));
         } finally {
