@@ -47,22 +47,27 @@
             android:textAllCaps="true"
             android:fontFamily="@font/outfit_medium" />
 
-        <!-- Scrolls only if a TV's screen is too short for every row. -->
+        <!-- Scrolls only if a TV's screen is too short for every row. The list clips to its own box so scrolled
+             rows never draw over the clock and title; the padding inside it leaves room for the focus zoom. -->
         <ScrollView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:layout_marginStart="-14dp"
+            android:layout_marginEnd="-14dp"
             android:scrollbars="none"
-            android:clipChildren="false"
-            android:clipToPadding="false"
-            android:paddingStart="8dp"
-            android:paddingEnd="8dp"
-            android:paddingBottom="16dp">
+            android:overScrollMode="never"
+            android:clipChildren="true"
+            android:clipToPadding="true">
 
             <LinearLayout
                 android:id="@+id/sideRows"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
+                android:paddingStart="14dp"
+                android:paddingEnd="14dp"
+                android:paddingTop="6dp"
+                android:paddingBottom="16dp"
                 android:clipChildren="false"
                 android:clipToPadding="false" />
         </ScrollView>
