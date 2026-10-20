@@ -27,14 +27,30 @@ debloat tooling and the original launcher.
 - **Optimize** frees RAM by force-stopping background apps, then shows how much it freed.
 
 **The remote's ⚙ button** opens a quick settings panel from the right edge, over any app. It has
-Wi-Fi, Bluetooth and Inputs lists inside the panel, Picture, Sound, the sleep timer, Optimize and
-All settings. Optimize from here leaves the app you're watching running. Home or Back closes it.
+Wi-Fi, Bluetooth and Inputs lists inside the panel, Picture, MEMC, Sound, the sleep timer, Optimize
+and All settings. Optimize from here leaves the app you're watching running. Home or Back closes it.
+
+**MEMC** (motion smoothing) switches between Off, Standard, Sports and Smooth while the video keeps
+playing. MediaTek TVs only, with the TV menu in English. The TV keeps MEMC per picture mode, so set
+it once while watching SDR, HDR and Dolby Vision content.
 
 **Arranging apps**: hold OK on a tile and choose Move, then use the arrows and press OK to drop it.
 To reset the order, hold OK on Settings and choose Reset app order.
 
 **Safety net**: if Home crashes 3 times in 5 minutes it starts in safe mode, without the shelf.
 If the TV switches the accessibility services off, Home turns them back on by itself.
+
+## Lightweight by design
+
+The point is a faster TV than stock Google TV, so every feature has to cost nothing while idle.
+Measured on the 1.8 GB Philips:
+
+- **391 KB** APK, plain Java, no frameworks beyond RecyclerView.
+- **About 60 MB** of memory on Home, mostly poster images. When a game or film needs memory, Home hands
+  the posters back (about 18 MB) and redraws them when you return.
+- **0% CPU** while idle, on Home or behind another app. No background service polls anything; the
+  shelf refreshes only when you come back to Home and its data is stale.
+- **About 220 ms** to come back to Home, with 60 fps focus motion.
 
 ## Setting up the Top Shelf
 
@@ -50,7 +66,19 @@ Tudum data and needs no key. The key is stored only in the app's private storage
 
 ## Install
 
-You need a computer on the same Wi-Fi as the TV, JDK 17 and the Android SDK (platform 34). On macOS:
+**From a release:** download `dante-tv-<version>.apk` from
+[Releases](https://github.com/baladante94/dante_tv/releases), turn on debugging on the TV (below), then:
+
+```bash
+adb connect <tv ip>:<port>
+adb install dante-tv-1.0.0.apk
+adb shell pm grant com.dante.tv android.permission.WRITE_SECURE_SETTINGS
+adb shell cmd package set-home-activity --user 0 com.dante.tv/.MainActivity
+```
+
+Press Home on the remote. Dante TV turns its accessibility services on by itself.
+
+**From source:** you need JDK 17 and the Android SDK (platform 34). On macOS:
 
 ```bash
 brew install openjdk@17 android-commandlinetools
@@ -70,7 +98,7 @@ Then grant the one permission that lets Home turn its accessibility services on,
 the TV switches them off. Press Home once afterwards:
 
 ```bash
-adb shell pm grant com.gathin.tvhome android.permission.WRITE_SECURE_SETTINGS
+adb shell pm grant com.dante.tv android.permission.WRITE_SECURE_SETTINGS
 ```
 
 | Service | What it does |

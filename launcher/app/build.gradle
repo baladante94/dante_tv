@@ -3,17 +3,33 @@ plugins {
 }
 
 android {
-    namespace 'com.gathin.tvhome'
+    namespace 'com.dante.tv'
     compileSdk 34
 
     defaultConfig {
-        applicationId 'com.gathin.tvhome'
+        applicationId 'com.dante.tv'
         minSdk 26
         // 28, the oldest this TV runs without a warning: Android only lets apps targeting 28 or lower
         // join a Wi-Fi network directly (WifiManager.addNetwork), which the menu's Wi-Fi panel needs.
         targetSdk 28
-        versionCode 4
-        versionName '2.3'
+        versionCode 5
+        versionName '1.0.0'
+    }
+
+    // The release key lives outside the repo; keystore.properties (git-ignored) points at it. Without it, release
+    // builds fall back to the debug key so anyone can still build and sideload.
+    def keyProps = new Properties()
+    def keyFile = rootProject.file('keystore.properties')
+    if (keyFile.exists()) keyFile.withInputStream { keyProps.load(it) }
+    signingConfigs {
+        release {
+            if (keyFile.exists()) {
+                storeFile file(keyProps['storeFile'])
+                storePassword keyProps['storePassword']
+                keyAlias keyProps['keyAlias']
+                keyPassword keyProps['keyPassword']
+            }
+        }
     }
 
     buildTypes {
@@ -22,8 +38,7 @@ android {
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            // Sideloaded over ADB, never published: sign with the debug key so it installs over a debug build.
-            signingConfig signingConfigs.debug
+            signingConfig keyFile.exists() ? signingConfigs.release : signingConfigs.debug
         }
     }
 
