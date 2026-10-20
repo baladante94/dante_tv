@@ -81,10 +81,18 @@ public class ShelfSetupActivity extends Activity {
         String url = "http://" + ip + ":" + server.getLocalPort() + "/" + secret;
         ((TextView) findViewById(R.id.setupUrl)).setText(url);
         ((ImageView) findViewById(R.id.setupQr)).setImageBitmap(qr(url, 512));
+        // Each connection on its own thread: phone browsers open a spare connection first and send nothing on it,
+        // which would hold up the real request behind it.
         new Thread(() -> {
             while (server != null && !server.isClosed()) {
-                try (Socket s = server.accept()) {
-                    handle(s);
+                try {
+                    Socket s = server.accept();
+                    new Thread(() -> {
+                        try (Socket c = s) {
+                            handle(c);
+                        } catch (Exception ignored) {
+                        }
+                    }, "shelf-setup-conn").start();
                 } catch (Exception ignored) {
                 }
             }
@@ -103,7 +111,7 @@ public class ShelfSetupActivity extends Activity {
 
     /** One request: the form on GET, the key on POST. Anything not at the secret address is refused. */
     private void handle(Socket s) throws Exception {
-        s.setSoTimeout(15_000);
+        s.setSoTimeout(5_000);
         BufferedReader in = new BufferedReader(new InputStreamReader(s.getInputStream(), StandardCharsets.UTF_8));
         String request = in.readLine();
         if (request == null) return;
