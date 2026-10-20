@@ -47,7 +47,8 @@ is ignored, and a file that doesn't parse is ignored as a whole, so a theme can 
 
 `wallpaper.jpg` is drawn full screen behind the launcher, centre-cropped. Keep it dark, 1920×1080 and
 under about 300 KB: the text, the hero name and the dock band are designed for black, and a 1 GB TV
-decodes the picture into memory on every Home start. Pictures larger than the screen are downsampled.
+decodes the picture into memory on every Home start. Pictures larger than the screen are scaled down to
+it; a picture over 4K (about 8.4 million pixels) is not shown at all and the plain colour stays.
 
 ## Reduced motion
 

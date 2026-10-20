@@ -328,8 +328,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
     }
 
     /**
-     * A theme's full-screen picture behind everything. Decoded once, downsampled to the screen so a 4K
-     * JPEG costs a 1080p bitmap at most (about 8 MB), which is the price of a wallpaper on a 1 GB TV.
+     * A theme's full-screen picture behind everything. Decoded once at the size CENTER_CROP shows, so it
+     * costs a screen-sized bitmap (about 4 MB at 1080p), which is the price of a wallpaper on a 1 GB TV.
+     * A picture over 4K is refused rather than decoded (#166); the plain colour stays.
      */
     private boolean showWallpaper(File file) {
         try {
@@ -337,10 +338,17 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
             android.graphics.BitmapFactory.Options opts = new android.graphics.BitmapFactory.Options();
             opts.inJustDecodeBounds = true;
             android.graphics.BitmapFactory.decodeFile(file.getPath(), opts);
-            int sample = 1;
-            while (opts.outWidth / (sample * 2) >= dm.widthPixels && opts.outHeight / (sample * 2) >= dm.heightPixels) sample *= 2;
+            int w = opts.outWidth, h = opts.outHeight;
+            if (!WallpaperSize.accepted(w, h)) return;
+            int sample = WallpaperSize.sampleSize(w, h, dm.widthPixels, dm.heightPixels);
             opts.inJustDecodeBounds = false;
             opts.inSampleSize = sample;
+            int[] scale = WallpaperSize.coverScale(w / sample, h / sample, dm.widthPixels, dm.heightPixels);
+            if (scale != null) {
+                opts.inScaled = true;
+                opts.inDensity = scale[0];
+                opts.inTargetDensity = scale[1];
+            }
             opts.inPreferredConfig = android.graphics.Bitmap.Config.RGB_565;   // no alpha needed, half the memory
             android.graphics.Bitmap bmp = android.graphics.BitmapFactory.decodeFile(file.getPath(), opts);
             if (bmp == null) return false;
