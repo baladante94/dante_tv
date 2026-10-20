@@ -1,5 +1,6 @@
 package com.gathin.tvhome;
 
+import java.util.Arrays;
 import android.animation.ArgbEvaluator;
 import android.animation.ValueAnimator;
 import android.app.Activity;
@@ -28,6 +29,8 @@ import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.NetworkRequest;
 import android.net.Uri;
+import android.net.wifi.ScanResult;
+import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
 import android.os.Build;
@@ -52,28 +55,24 @@ import android.widget.LinearLayout;
 import android.widget.PopupWindow;
 import android.widget.TextView;
 import android.widget.Toast;
-
 import androidx.annotation.NonNull;
-import androidx.dynamicanimation.animation.DynamicAnimation;
-import androidx.dynamicanimation.animation.FloatPropertyCompat;
-import androidx.dynamicanimation.animation.SpringAnimation;
-import androidx.dynamicanimation.animation.SpringForce;
 import androidx.recyclerview.widget.GridLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
-
 import java.io.File;
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 
 /**
- * tvOS style home: black, a pinned dock row, an app grid, and one glass highlight that springs between tiles.
+ * tvOS style home: a left menu rail, a pinned dock row and an app grid whose tiles lift and lean into focus.
  */
-public class MainActivity extends Activity implements AppAdapter.TileListener {
+public class MainActivity extends Activity implements AppAdapter.TileListener, TopShelf.Host {
 
     private static final int LAUNCHER_SETTINGS_REQUEST = 42;
     /** Tiles per row and dock slots (res/values/config.xml, columns). Set in onCreate. */
@@ -87,9 +86,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private String sourcePanelAction;
 
     private AppAdapter adapter;
+    private Launchpad launchpad;
+    /** TMDB key for the trending rows (a theme's config.json, tmdb_token); empty turns them off. */
+    private String tmdbToken = "";
+    private TopShelf shelf;
+    private boolean safeMode;
     private RecyclerView grid;
     private FrameLayout root;
-    private GlassView glass;
     private View ambient;
     private TextView heroName;
     private int ambientColor = -1;
@@ -98,19 +101,18 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private boolean animations;
     private boolean advancedEffects;
     private TextView greeting;
-    private View btnInputs;
-    private TextView btnWifi;
+    private TextView wifiLabel;
+    private ImageView wifiIcon;
+    private View sidebarBg, scrim, navHome, navApps, navInputs, navWifi;
+    private final List<TextView> menuLabels = new ArrayList<>();
+    private boolean menuOpen;
+    /** The tile entrance plays once per process, not on every return to Home. */
+    private static boolean entered;
     private TextView shamsiDate;
     private boolean shamsi;
     /** Optional time-of-day backdrop (config.xml, sky_intensity); 0 keeps it hidden. */
     private SkyView sky;
     private String vpnApp;
-    private SpringAnimation springX, springY;
-    private float glassTargetX, glassTargetY;
-    // How far the grid has scrolled the glass. springY works without it, in grid content space, so a
-    // scroll moves the glass in lockstep with its tile instead of becoming a moving spring target.
-    private float glassScrollShift;
-    private boolean glassShown;
     // Static so they survive the activity being destroyed while another app is open (low-memory TVs,
     // or Developer options → "Don't keep activities"); they only reset when the process dies.
     private static int lastFocused = 0;
@@ -147,7 +149,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             handler.post(MainActivity.this::updateWifiLabel);
         }
     };
-    /** Shows the Inputs pill once the TV registers an input: at boot HDMI inputs can appear after Home is shown. */
+    /** Shows the Inputs row once the TV registers an input: at boot HDMI inputs can appear after Home is shown. */
     private final TvInputManager.TvInputCallback inputCallback = new TvInputManager.TvInputCallback() {
         @Override
         public void onInputAdded(String inputId) {
@@ -178,6 +180,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             // Updates send REMOVED followed by ADDED; keep the tile until the new APK is ready.
             if (Intent.ACTION_PACKAGE_REMOVED.equals(intent.getAction())
                     && intent.getBooleanExtra(Intent.EXTRA_REPLACING, false)) return;
+            AppAdapter.forget(intent.getData() != null ? intent.getData().getSchemeSpecificPart() : null);
             reloadApps(false);
         }
     };
@@ -187,6 +190,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             updateGreeting();
             updateWifiLabel();
             sky.update();
+            if (shelf != null && System.currentTimeMillis() / 60_000L % (TopShelf.ROTATE_MS / 60_000L) == 0) shelf.rotate();
             handler.postDelayed(this, MINUTE_MS);
         }
     };
@@ -194,6 +198,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        Watchdog.install(this);
+        // After repeated crashes, come up without the extras so the TV keeps a working Home.
+        safeMode = Watchdog.safeMode(this);
         setContentView(R.layout.activity_main);
         density = getResources().getDisplayMetrics().density;
         // config.xml, overlaid by config.json from a pushed theme (see Config and tools/theme.sh).
@@ -209,18 +216,20 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         sourcePanelAction = cfg.sourcePanelAction;
 
         root = findViewById(R.id.root);
-        root.setBackgroundColor(cfg.backgroundColor);
-        if (cfg.wallpaper != null) showWallpaper(cfg.wallpaper);
+        // Root paints every pixel, so the window's own black fill underneath is wasted work each frame;
+        // so is the root colour under an opaque wallpaper.
+        getWindow().setBackgroundDrawable(null);
+        if (safeMode || cfg.wallpaper == null || !showWallpaper(cfg.wallpaper)) root.setBackgroundColor(cfg.backgroundColor);
         sky = findViewById(R.id.sky);
-        sky.setIntensity(cfg.skyIntensity);
-        glass = findViewById(R.id.glass);
+        sky.setIntensity(safeMode ? 0 : cfg.skyIntensity);
         ambient = findViewById(R.id.ambient);
         // The glow is one bitmap, so its alpha can be applied while drawing it. Otherwise every frame of
         // a fade renders it into a full-screen offscreen buffer first.
         ambient.forceHasOverlappingRendering(false);
         heroName = findViewById(R.id.heroName);
         greeting = findViewById(R.id.greeting);
-        btnWifi = findViewById(R.id.btnWifi);
+        wifiLabel = findViewById(R.id.wifiLabel);
+        wifiIcon = findViewById(R.id.wifiIcon);
         shamsiDate = findViewById(R.id.shamsiDate);
         shamsi = cfg.shamsiDate;
         if (shamsi) {
@@ -244,15 +253,29 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         });
         grid.setHasFixedSize(true);
         grid.setItemAnimator(null);
+        // Keep a few off-screen rows built so scrolling back up rebinds nothing.
+        grid.setItemViewCacheSize(COLUMNS * 3);
         grid.addItemDecoration(new DockDecoration(COLUMNS, density));
+        grid.addItemDecoration(new SectionDecoration(adapter(cfg), COLUMNS, density,
+                getResources().getFont(R.font.outfit_medium)));
         if (animations) {
             int enterAnim = reducedMotion ? R.anim.tile_enter_reduced : R.anim.tile_enter;
             float enterDelay = reducedMotion ? 0f : 0.06f;
             grid.setLayoutAnimation(new LayoutAnimationController(
                     AnimationUtils.loadAnimation(this, enterAnim), enterDelay));
         }
-        adapter = new AppAdapter(this, this, COLUMNS, cfg);
-        grid.setAdapter(adapter);
+        grid.setAdapter(adapter(cfg));
+        launchpad = new Launchpad(this, root, adapter, animations);
+        tmdbToken = safeMode ? "" : cfg.tmdbToken;
+        if (!tmdbToken.isEmpty()) {
+            // Under the menu's scrim and panel (scrim is not looked up yet, so find it here).
+            shelf = new TopShelf(this, root, root.indexOfChild(findViewById(R.id.scrim)), this, animations);
+            shelf.setItems(Trending.cached(this));
+            grid.post(this::prefetchShelf);
+        }
+        if (safeMode) Toast.makeText(this, R.string.safe_mode, Toast.LENGTH_LONG).show();
+        // Running a few minutes without crashing ends safe mode for the next start.
+        handler.postDelayed(() -> Watchdog.clear(this), Watchdog.STABLE_MS);
 
         // tvOS layout: push the dock row towards the bottom of the screen, leaving room for
         // rows_below_dock grid rows under it; the rest of the grid stays below until you press Down.
@@ -270,89 +293,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             }
         });
 
-        // Keep the glass glued to its tile while the grid scrolls.
-        grid.addOnScrollListener(new RecyclerView.OnScrollListener() {
-            @Override
-            public void onScrolled(@NonNull RecyclerView rv, int dx, int dy) {
-                if (!glassShown) return;
-                glassTargetY -= dy;
-                glassScrollShift -= dy;
-                glass.setTranslationY(glass.getTranslationY() - dy);
-            }
-        });
-
-        // Liquid feel: soft springs on the highlight's position.
-        springX = new SpringAnimation(glass, DynamicAnimation.TRANSLATION_X);
-        springY = new SpringAnimation(glass, new FloatPropertyCompat<View>("glassContentY") {
-            @Override
-            public float getValue(View v) {
-                return v.getTranslationY() - glassScrollShift;
-            }
-
-            @Override
-            public void setValue(View v, float value) {
-                v.setTranslationY(value + glassScrollShift);
-            }
-        });
-        for (SpringAnimation s : new SpringAnimation[]{springX, springY}) {
-            if (reducedMotion) {
-                // Stiff and almost critically damped: settles in a few frames instead of oscillating,
-                // and stops once the highlight is within 1.5 px of its tile.
-                s.setSpring(new SpringForce().setStiffness(1400f).setDampingRatio(0.95f));
-                s.setMinimumVisibleChange(1.5f);
-            } else {
-                s.setSpring(new SpringForce().setStiffness(advancedEffects ? 320f : 260f)
-                        .setDampingRatio(advancedEffects ? 0.76f : 0.58f));
-            }
-        }
-
-        btnInputs = findViewById(R.id.btnInputs);
-        View btnSettings = findViewById(R.id.btnSettings);
-        btnInputs.setOnClickListener(v -> showInputs());
-        btnWifi.setOnClickListener(v -> openNetworkPill());
-        btnWifi.setOnLongClickListener(v -> {
-            open(systemIntent(Settings.ACTION_WIFI_SETTINGS));
-            return true;
-        });
-        btnSettings.setOnClickListener(v -> open(systemIntent(Settings.ACTION_SETTINGS)));
-        btnSettings.setOnLongClickListener(v -> {
-            showSettingsMenu();
-            return true;
-        });
-
-        // Keep focus on the top bar at its ends and at the top: Android's focus finder would otherwise
-        // jump to a tile far below when there is nothing in that direction.
-        boolean rtlMenuBar = getResources().getBoolean(R.bool.rtl_menu_bar);
-        View.OnKeyListener pillKeys = (v, keyCode, event) -> {
-            if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
-            if (keyCode == KeyEvent.KEYCODE_DPAD_UP) return true;
-            if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
-                // Back to the dock tile Up came from, not wherever the focus finder lands.
-                focusTile(lastFocused % COLUMNS);
-                return true;
-            }
-            int firstButton = btnInputs.getVisibility() == View.VISIBLE ? R.id.btnInputs : R.id.btnWifi;
-            int leftButton = rtlMenuBar ? R.id.btnSettings : firstButton;
-            int rightButton = rtlMenuBar ? firstButton : R.id.btnSettings;
-            if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) return v.getId() == leftButton;
-            return keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && v.getId() == rightButton;
-        };
-        btnInputs.setOnKeyListener(pillKeys);
-        btnWifi.setOnKeyListener(pillKeys);
-        btnSettings.setOnKeyListener(pillKeys);
-        if (advancedEffects) {
-            for (View button : new View[]{btnInputs, btnWifi, btnSettings}) {
-                button.setOnFocusChangeListener((view, focused) -> view.animate()
-                        .scaleX(focused ? 1.04f : 1f).scaleY(focused ? 1.04f : 1f)
-                        .setDuration(160).start());
-            }
-        }
-
-        // Hide the glass when focus leaves the tiles.
-        getWindow().getDecorView().getViewTreeObserver().addOnGlobalFocusChangeListener((oldF, newF) -> {
-            boolean onTile = newF != null && newF.getId() == R.id.card;
-            if (!onTile) hideGlass();
-        });
+        setUpMenu();
 
         packageFilter.addAction(Intent.ACTION_PACKAGE_ADDED);
         packageFilter.addAction(Intent.ACTION_PACKAGE_REMOVED);
@@ -371,11 +312,16 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         }
     }
 
+    private AppAdapter adapter(Config cfg) {
+        if (adapter == null) adapter = new AppAdapter(this, this, COLUMNS, cfg);
+        return adapter;
+    }
+
     /**
      * A theme's full-screen picture behind everything. Decoded once, downsampled to the screen so a 4K
      * JPEG costs a 1080p bitmap at most (about 8 MB), which is the price of a wallpaper on a 1 GB TV.
      */
-    private void showWallpaper(File file) {
+    private boolean showWallpaper(File file) {
         try {
             android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
             android.graphics.BitmapFactory.Options opts = new android.graphics.BitmapFactory.Options();
@@ -387,13 +333,15 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             opts.inSampleSize = sample;
             opts.inPreferredConfig = android.graphics.Bitmap.Config.RGB_565;   // no alpha needed, half the memory
             android.graphics.Bitmap bmp = android.graphics.BitmapFactory.decodeFile(file.getPath(), opts);
-            if (bmp == null) return;
+            if (bmp == null) return false;
             android.widget.ImageView wall = new android.widget.ImageView(this);
             wall.setScaleType(android.widget.ImageView.ScaleType.CENTER_CROP);
             wall.setImageBitmap(bmp);
             root.addView(wall, 0, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            return true;
         } catch (Exception | OutOfMemoryError e) {
             // A bad or huge picture must never take the home screen down; the plain colour stays.
+            return false;
         }
     }
 
@@ -407,6 +355,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         super.onNewIntent(intent);
         if (intent == null || !intent.hasCategory(Intent.CATEGORY_HOME)) return;
         grid.scrollToPosition(0);
+        launchpad.close(false);
+        closeMenu();
         lastFocused = 0;
         lastFocusedKey = adapter.getItemCount() > 0 ? adapter.keyAt(0) : null;
         rebuildOnResume = true;
@@ -431,9 +381,16 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             reloadApps(true);
         }
         rebuildOnResume = false;
+        ensureServices();
         updateGreeting();
         updateWifiLabel();
         updateInputsButton();
+        // New trending rows arrive in the background; show them the next time Home is not in use.
+        if (shelf != null) Trending.refreshIfStale(this, tmdbToken, () -> runOnUiThread(() -> {
+            shelf.setItems(Trending.cached(this));
+            prefetchShelf();
+            if (lastFocused < COLUMNS) shelf.showFor(adapter.pkgAt(lastFocused));
+        }));
         sky.update();
         handler.postDelayed(minuteTick, MINUTE_MS);
     }
@@ -451,14 +408,15 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         final int returnSlot = lastFocused;
         final boolean restoreFocus = animate || grid.hasFocus();
         if (restoreFocus) {
-            glassShown = false;
-            glass.setAlpha(0f);
             heroShown = false;
             heroName.setAlpha(0f);
             ambient.setAlpha(0f);
         }
         reloadTiles();
-        if (animate && animations && !reducedMotion) grid.scheduleLayoutAnimation();
+        if (animate && animations && !reducedMotion && !entered) {
+            grid.scheduleLayoutAnimation();
+            entered = true;
+        }
 
         if (restoreFocus) {
             // Follow the same app, or the nearest remaining slot when it was removed.
@@ -545,10 +503,16 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
 
     @Override
     public void onBackPressed() {
-        // Home screen: Back goes nowhere.
+        // Home screen: Back only closes All Apps or the menu.
+        if (launchpad.isOpen()) {
+            launchpad.close(true);
+            focusTile(lastFocused);
+        } else if (menuOpen) {
+            focusTile(lastFocused);
+        }
     }
 
-    // ---- glass highlight -------------------------------------------------------------------------
+    // ---- focus -----------------------------------------------------------------------------------
 
     @Override
     public void onTileFocused(int position, View card) {
@@ -557,38 +521,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         // Tile rect in root coordinates, using layout positions (ignores the scale animation).
         Rect r = new Rect(0, 0, card.getWidth(), card.getHeight());
         root.offsetDescendantRectToMyCoords(card, r);
-        float pad = 6f * density;        // matches GlassView's glow inset
-        float scale = adapter.focusScale();
-        float w = card.getWidth() * scale + 2 * pad;
-        float h = card.getHeight() * scale + 2 * pad;
-        float x = r.exactCenterX() - w / 2f;
-        float y = r.exactCenterY() - h / 2f - (advancedEffects ? 4f * density : 0f);
-
-        ViewGroup.LayoutParams lp = glass.getLayoutParams();
-        if (lp.width != (int) w || lp.height != (int) h) {
-            lp.width = (int) w;
-            lp.height = (int) h;
-            glass.setLayoutParams(lp);
-            glass.setRadius(AppAdapter.cornerRadius(card.getWidth(), density) * scale + pad);
-        }
-        glassTargetX = x;
-        glassTargetY = y;
-        if (!glassShown) {
-            springX.cancel();
-            springY.cancel();
-            glass.setTranslationX(x);
-            glass.setTranslationY(y);
-            if (animations) glass.animate().alpha(1f).setDuration(reducedMotion ? 100 : 180).start();
-            else glass.setAlpha(1f);
-            glassShown = true;
-        } else if (!animations) {
-            springX.cancel();
-            springY.cancel();
-            glass.setTranslationX(x);
-            glass.setTranslationY(y);
-        } else {
-            springX.animateToFinalPosition(x);
-            springY.animateToFinalPosition(y - glassScrollShift);
+        float pad = 8f * density;        // room for the lifted tile's zoom and shadow
+        if (shelf != null) {
+            shelf.setShown(position < COLUMNS);
+            if (position < COLUMNS) shelf.showFor(adapter.pkgAt(position));
         }
         View item = (View) card.getParent();
         if (position < COLUMNS) {
@@ -605,15 +541,49 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             showHero(position, scroll ? r.top - dy : r.top);
         } else {
             hideHero();
-            // Scroll just enough so the whole glass (not only the tile) is visible.
+            // Scroll just enough so the lifted tile (not only its cell) is visible.
             Rect want = new Rect(0, -(int) pad * 2, item.getWidth(), item.getHeight() + (int) pad);
             grid.requestChildRectangleOnScreen(item, want, reducedMotion);
         }
     }
 
+    @Override
+    public void onTileClicked(int position, Runnable launch) {
+        launch.run();
+    }
+
+    private void prefetchShelf() {
+        List<String> dock = new ArrayList<>();
+        for (int i = 0; i < COLUMNS; i++) dock.add(adapter.pkgAt(i));
+        shelf.prefetch(dock);
+    }
+
+    @Override
+    public void openMenuFromShelf() {
+        openMenu(navHome);
+    }
+
+    @Override
+    public void leaveShelf() {
+        AppAdapter.pendingMove = KeyEvent.KEYCODE_DPAD_DOWN;
+        focusTile(lastFocused);
+    }
+
     // ---- top shelf -------------------------------------------------------------------------------
 
     private void showHero(int position, float dockTopInRoot) {
+        if (shelf != null && shelf.hasItems()) {
+            // The shelf's heading takes the title's place; keep only the ambient glow.
+            heroName.setAlpha(0f);
+            setAmbient(adapter.ambientColorAt(position));
+            if (!heroShown) {
+                ambient.animate().cancel();
+                ambient.setAlpha(0f);
+                ambient.animate().alpha(1f).setDuration(animations ? 400 : 0).start();
+                heroShown = true;
+            }
+            return;
+        }
         String label = adapter.labelAt(position);
         int color = adapter.ambientColorAt(position);
         float y = dockTopInRoot - 14 * density - 26 * density - heroName.getHeight();
@@ -740,14 +710,6 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         }
     }
 
-    private void hideGlass() {
-        if (!glassShown) return;
-        glassShown = false;
-        glass.animate().cancel();
-        if (animations) glass.animate().alpha(0f).setDuration(160).start();
-        else glass.setAlpha(0f);
-    }
-
     // ---- navigation ------------------------------------------------------------------------------
 
     @Override
@@ -757,15 +719,31 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         // Horizontal: swallow the key at a row's ends so focus never wraps to the next row or
         // escapes up into the top bar. Mid-row moves fall through to the default focus search.
         if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
-            return GridNavigation.atHorizontalEdge(position, count, COLUMNS,
-                    rtlAppGrid, keyCode == KeyEvent.KEYCODE_DPAD_LEFT);
+            boolean left = keyCode == KeyEvent.KEYCODE_DPAD_LEFT;
+            boolean edge = GridNavigation.atHorizontalEdge(position, count, COLUMNS, rtlAppGrid, left);
+            if (edge && left && !rtlAppGrid) {
+                openMenu(position < COLUMNS ? navHome : navApps);
+                return true;
+            }
+            // The end of a part-filled Jump back in row behaves like the edge of the grid.
+            if (!left && adapter.isSpacer(position + 1)) edge = true;
+            if (!edge) AppAdapter.pendingMove = keyCode;
+            return edge;
         }
+        AppAdapter.pendingMove = keyCode;
         if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
-            if (position < COLUMNS) return false;          // dock row: let focus move to the top bar
+            if (position < COLUMNS) {                      // dock row: the Top Shelf, if there is one
+                AppAdapter.pendingMove = 0;
+                if (shelf != null) shelf.focusFirst();
+                return true;
+            }
             target = position - COLUMNS;
         } else {
             int lastRowStart = ((count - 1) / COLUMNS) * COLUMNS;
-            if (position >= lastRowStart) return true;     // already on the last row: stay put
+            if (position >= lastRowStart) {                // already on the last row: stay put
+                AppAdapter.pendingMove = 0;
+                return true;
+            }
             target = Math.min(position + COLUMNS, count - 1);
         }
         focusTile(target);
@@ -774,14 +752,16 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
 
     private void focusTile(int position) {
         if (adapter.getItemCount() == 0) {
-            btnWifi.requestFocus();
+            navHome.requestFocus();
             return;
         }
-        final int pos = Math.max(0, Math.min(position, adapter.getItemCount() - 1));
+        int clamped = Math.max(0, Math.min(position, adapter.getItemCount() - 1));
+        while (clamped > 0 && adapter.isSpacer(clamped)) clamped--;   // the nearest app to the left in that row
+        final int pos = clamped;
         RecyclerView.ViewHolder vh = grid.findViewHolderForAdapterPosition(pos);
         if (vh != null) {
             View card = vh.itemView.findViewById(R.id.card);
-            // Already focused (e.g. back from an app): no focus change fires, so restore the glass by hand.
+            // Already focused (e.g. back from an app): no focus change fires, so restore the top shelf by hand.
             if (card.isFocused()) onTileFocused(pos, card);
             else card.requestFocus();
             return;
@@ -808,7 +788,120 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         grid.smoothScrollToPosition(pos);
     }
 
-    // ---- top bar ---------------------------------------------------------------------------------
+    // ---- left menu -------------------------------------------------------------------------------
+
+    private void setUpMenu() {
+        sidebarBg = findViewById(R.id.sidebarBg);
+        scrim = findViewById(R.id.scrim);
+        navHome = findViewById(R.id.navHome);
+        navApps = findViewById(R.id.navApps);
+        navInputs = findViewById(R.id.navInputs);
+        navWifi = findViewById(R.id.navWifi);
+        View navSettings = findViewById(R.id.navSettings);
+        View navOptimize = findViewById(R.id.navOptimize);
+        View navQuick = findViewById(R.id.navQuick);
+        navQuick.setOnClickListener(v -> showQuick(navQuick));
+        navOptimize.setOnClickListener(v -> optimize(navOptimize));
+        View menu = findViewById(R.id.menu);
+        sidebarBg.setTranslationX(-280 * density);
+        // The panel and the scrim are flat fills: draw their alpha directly instead of via an offscreen buffer.
+        sidebarBg.forceHasOverlappingRendering(false);
+        scrim.forceHasOverlappingRendering(false);
+
+        navHome.setOnClickListener(v -> {
+            grid.scrollToPosition(0);
+            AppAdapter.pendingMove = KeyEvent.KEYCODE_DPAD_RIGHT;
+            focusTile(0);
+        });
+        navApps.setOnClickListener(v -> launchpad.open(sidebarBg, scrim, findViewById(R.id.menu)));
+        navInputs.setOnClickListener(v -> showInputs());
+        navWifi.setOnClickListener(v -> {
+            if (vpnApp.isEmpty()) showWifi();
+            else openNetworkPill();
+        });
+        navWifi.setOnLongClickListener(v -> {
+            open(systemIntent(Settings.ACTION_WIFI_SETTINGS));
+            return true;
+        });
+        navSettings.setOnClickListener(v -> open(systemIntent(Settings.ACTION_SETTINGS)));
+        navSettings.setOnLongClickListener(v -> {
+            showSettingsMenu();
+            return true;
+        });
+
+        View[] items = {navHome, navApps, navInputs, navWifi, navQuick, navOptimize, navSettings};
+        for (int i = 0; i < items.length; i++) {
+            View item = items[i];
+            menuLabels.add((TextView) ((ViewGroup) item).getChildAt(1));
+            final boolean first = i == 0, last = i == items.length - 1;
+            item.setOnKeyListener((v, keyCode, event) -> {
+                if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
+                if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                    AppAdapter.pendingMove = KeyEvent.KEYCODE_DPAD_RIGHT;
+                    focusTile(lastFocused);
+                    return true;
+                }
+                if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) return true;
+                if (keyCode == KeyEvent.KEYCODE_DPAD_UP) return first;
+                return keyCode == KeyEvent.KEYCODE_DPAD_DOWN && last;
+            });
+            if (animations) {
+                item.setOnFocusChangeListener((view, focused) -> view.animate()
+                        .scaleX(focused ? 1.05f : 1f).scaleY(focused ? 1.05f : 1f)
+                        .setDuration(160).start());
+            }
+        }
+
+        // The menu is open exactly while one of its rows has focus.
+        getWindow().getDecorView().getViewTreeObserver().addOnGlobalFocusChangeListener((oldF, newF) -> {
+            boolean inMenu = newF != null && newF.getParent() == menu;
+            if (inMenu) expandMenu();
+            else collapseMenu();
+        });
+    }
+
+    private void openMenu(View row) {
+        row.requestFocus();
+    }
+
+    private void closeMenu() {
+        if (menuOpen) focusTile(lastFocused);
+    }
+
+    /** Slides the frosted panel in from the left and fades the labels in; everything is translation and alpha. */
+    private void expandMenu() {
+        if (menuOpen) return;
+        menuOpen = true;
+        hideHero();
+        long d = animations ? (reducedMotion ? 120 : 260) : 0;
+        android.view.animation.Interpolator ease = new android.view.animation.DecelerateInterpolator(1.8f);
+        sidebarBg.animate().cancel();
+        sidebarBg.animate().translationX(0f).alpha(1f).setDuration(d).setInterpolator(ease).start();
+        scrim.animate().alpha(0.55f).setDuration(d).start();
+        for (int i = 0; i < menuLabels.size(); i++) {
+            TextView label = menuLabels.get(i);
+            label.animate().cancel();
+            label.setTranslationX(-14 * density);
+            label.animate().alpha(1f).translationX(0f).setStartDelay(animations ? 40 + i * 25L : 0)
+                    .setDuration(d).setInterpolator(ease).start();
+        }
+    }
+
+    private void collapseMenu() {
+        if (!menuOpen) return;
+        menuOpen = false;
+        long d = animations ? (reducedMotion ? 100 : 200) : 0;
+        sidebarBg.animate().cancel();
+        sidebarBg.animate().translationX(-280 * density).alpha(0f).setDuration(d)
+                .setInterpolator(new android.view.animation.AccelerateInterpolator(1.4f)).start();
+        scrim.animate().alpha(0f).setDuration(d).start();
+        for (TextView label : menuLabels) {
+            label.animate().cancel();
+            label.animate().alpha(0f).translationX(-14 * density).setStartDelay(0).setDuration(d / 2).start();
+        }
+    }
+
+    // ---- header and network ----------------------------------------------------------------------
 
     private void updateGreeting() {
         int hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY);
@@ -869,17 +962,17 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             // The pill has a maximum width and ellipsizes at the end, which would cut the badge off after
             // a long network name, so shorten the name to whatever room the badge leaves. The total paddings
             // include the Wi-Fi icon.
-            TextPaint paint = btnWifi.getPaint();
-            float room = btnWifi.getMaxWidth() - btnWifi.getTotalPaddingStart() - btnWifi.getTotalPaddingEnd()
+            TextPaint paint = wifiLabel.getPaint();
+            float room = wifiLabel.getMaxWidth() - wifiLabel.getTotalPaddingStart() - wifiLabel.getTotalPaddingEnd()
                     - span.getSize(paint, badge, 0, badge.length(), null) - paint.measureText(" ") - 2 * density;
             text = TextUtils.ellipsize(text, paint, Math.max(0, room), TextUtils.TruncateAt.END).toString();
             SpannableString label = new SpannableString(text + " " + badge);
             label.setSpan(span, text.length() + 1, label.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-            btnWifi.setText(label);
+            wifiLabel.setText(label);
         } else {
-            btnWifi.setText(text);
+            wifiLabel.setText(text);
         }
-        btnWifi.setCompoundDrawablesRelativeWithIntrinsicBounds(icon, 0, 0, 0);
+        wifiIcon.setImageResource(icon);
     }
 
     /** The network pill opens the VPN app when one is configured and installed, otherwise Wi-Fi settings. */
@@ -904,7 +997,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         return new Intent(standardAction);   // nothing found: let open() show the can't-open toast
     }
 
-    /** Hides the Inputs pill when it would have nothing to list: streaming boxes have no HDMI-in, AV or tuner. */
+    /** Hides the Inputs row when it would have nothing to list: streaming boxes have no HDMI-in, AV or tuner. */
     private void updateInputsButton() {
         boolean any = liveTvIntent() != null || !sourcePanelService.isEmpty();
         TvInputManager tim = (TvInputManager) getSystemService(TV_INPUT_SERVICE);
@@ -916,7 +1009,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                 }
             }
         }
-        btnInputs.setVisibility(any ? View.VISIBLE : View.GONE);
+        navInputs.setVisibility(any ? View.VISIBLE : View.GONE);
     }
 
     /** The Live TV app's launch intent: its leanback entry point, or the configured action if it has none. */
@@ -970,12 +1063,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
 
     /** Dropdown menu under the Inputs pill: HDMI ports (with connection state), AV and Live TV. */
     private void showInputs() {
-        View anchor = findViewById(R.id.btnInputs);
+        View anchor = navInputs;
         View panel = getLayoutInflater().inflate(R.layout.popup_inputs, root, false);
         LinearLayout rows = panel.findViewById(R.id.rows);
 
-        // Compact: as wide as the Inputs pill (a touch wider so "HDMI 1" fits), hanging right below it.
-        int width = Math.max(anchor.getWidth(), (int) (150 * density));
+        int width = (int) (300 * density);
         final PopupWindow popup = glassPopup(panel, width);
 
         TvInputManager tim = (TvInputManager) getSystemService(TV_INPUT_SERVICE);
@@ -1047,8 +1139,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         panel.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
         popup.setWidth(Math.max(width, panel.getMeasuredWidth()));
 
-        int alignment = getResources().getBoolean(R.bool.rtl_menu_bar) ? Gravity.END : Gravity.START;
-        dropIn(popup, panel, anchor, alignment);
+        dropIn(popup, panel, anchor);
         rows.getChildAt(0).requestFocus();
     }
 
@@ -1065,14 +1156,14 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         return popup;
     }
 
-    /** Drop in: fade and unfold from the top edge, hanging under the anchor pill. */
-    private void dropIn(PopupWindow popup, View panel, View anchor, int gravity) {
+    /** Slide in beside a menu row: top-aligned with it, just right of the open panel. */
+    private void dropIn(PopupWindow popup, View panel, View anchor) {
         panel.setAlpha(0f);
-        panel.setPivotY(0f);
-        panel.setScaleY(0.92f);
-        panel.setTranslationY(-8 * density);
-        popup.showAsDropDown(anchor, 0, (int) (10 * density), gravity);
-        panel.animate().alpha(1f).scaleY(1f).translationY(0f).setDuration(220)
+        panel.setTranslationX(-10 * density);
+        int[] at = new int[2];
+        anchor.getLocationInWindow(at);
+        popup.showAtLocation(root, Gravity.TOP | Gravity.LEFT, (int) (292 * density), at[1]);
+        panel.animate().alpha(1f).translationX(0f).setDuration(220)
                 .setInterpolator(new android.view.animation.DecelerateInterpolator(1.6f)).start();
     }
 
@@ -1110,11 +1201,454 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         rows.addView(row);
     }
 
+    // ---- Wi-Fi picker ------------------------------------------------------------------------------
+
+    /** Networks around the TV in a panel beside the menu; OK joins one right there, asking for a password when needed. */
+    private void showWifi() {
+        WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+        if (wm == null) {
+            open(systemIntent(Settings.ACTION_WIFI_SETTINGS));
+            return;
+        }
+        View panel = getLayoutInflater().inflate(R.layout.popup_inputs, root, false);
+        LinearLayout rows = panel.findViewById(R.id.rows);
+        final PopupWindow popup = glassPopup(panel, (int) (360 * density));
+        fillWifiRows(wm, rows, popup);
+        // A fresh scan lands a few seconds later: redraw the list once, keeping focus on the same row.
+        BroadcastReceiver scanned = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                if (!popup.isShowing()) return;
+                int at = 0;
+                for (int i = 0; i < rows.getChildCount(); i++) if (rows.getChildAt(i).hasFocus()) at = i;
+                fillWifiRows(wm, rows, popup);
+                View row = rows.getChildAt(Math.min(at, rows.getChildCount() - 1));
+                if (row != null) row.requestFocus();
+            }
+        };
+        registerReceiver(scanned, new IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION));
+        popup.setOnDismissListener(() -> {
+            unregisterReceiver(scanned);
+            if (openPopup == popup) openPopup = null;
+        });
+        wm.startScan();
+        int[] at = new int[2];
+        navWifi.getLocationInWindow(at);
+        panel.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
+        popup.setHeight(Math.min(panel.getMeasuredHeight(), root.getHeight() - at[1] - (int) (34 * density)));
+        dropIn(popup, panel, navWifi);
+        rows.getChildAt(0).requestFocus();
+    }
+
+    private void fillWifiRows(WifiManager wm, LinearLayout rows, PopupWindow popup) {
+        rows.removeAllViews();
+        WifiInfo info = wm.getConnectionInfo();
+        String current = info != null ? unquote(info.getSSID()) : "";
+        Map<String, Integer> saved = new HashMap<>();
+        try {
+            List<WifiConfiguration> configs = wm.getConfiguredNetworks();
+            if (configs != null) for (WifiConfiguration c : configs) saved.put(unquote(c.SSID), c.networkId);
+        } catch (SecurityException ignored) {
+        }
+        // One row per network name, the strongest access point for it; the joined network first.
+        Map<String, ScanResult> best = new HashMap<>();
+        for (ScanResult r : wm.getScanResults()) {
+            if (r.SSID == null || r.SSID.isEmpty()) continue;
+            ScanResult b = best.get(r.SSID);
+            if (b == null || r.level > b.level) best.put(r.SSID, r);
+        }
+        List<ScanResult> list = new ArrayList<>(best.values());
+        Collections.sort(list, (a, b) -> {
+            if (a.SSID.equals(current) != b.SSID.equals(current)) return a.SSID.equals(current) ? -1 : 1;
+            return Integer.compare(b.level, a.level);
+        });
+        if (list.isEmpty()) {
+            addInputRow(rows, popup, R.drawable.ic_wifi, getString(R.string.wifi_searching), -1, () -> { });
+        }
+        for (ScanResult r : list) {
+            boolean here = r.SSID.equals(current);
+            Integer netId = saved.get(r.SSID);
+            String status = here ? getString(R.string.connected)
+                    : netId != null ? getString(R.string.wifi_saved)
+                    : wifiSecurity(r) == 0 ? getString(R.string.wifi_open) : getString(R.string.wifi_secured);
+            addInputRow(rows, popup, R.drawable.ic_wifi, r.SSID, -1, () -> joinWifi(wm, r, netId, here));
+            View row = rows.getChildAt(rows.getChildCount() - 1);
+            TextView st = row.findViewById(R.id.status);
+            st.setText(status);
+            st.setVisibility(View.VISIBLE);
+            row.findViewById(R.id.dot).setVisibility(here ? View.VISIBLE : View.GONE);
+        }
+        addSeparator(rows);
+        addInputRow(rows, popup, R.drawable.ic_settings, getString(R.string.wifi_settings), -1,
+                () -> open(systemIntent(Settings.ACTION_WIFI_SETTINGS)));
+    }
+
+    private static String unquote(String ssid) {
+        return ssid == null ? "" : ssid.replace("\"", "").trim();
+    }
+
+    /** 0 open, 1 WEP, 2 WPA/WPA2 personal, 3 WPA3 personal only, 4 enterprise (needs a sign-in). */
+    private static int wifiSecurity(ScanResult r) {
+        String c = r.capabilities == null ? "" : r.capabilities;
+        if (c.contains("EAP")) return 4;
+        if (c.contains("SAE") && !c.contains("PSK")) return 3;
+        if (c.contains("PSK")) return 2;
+        if (c.contains("WEP")) return 1;
+        return 0;
+    }
+
+    private void joinWifi(WifiManager wm, ScanResult r, Integer savedId, boolean here) {
+        if (here) return;
+        int security = wifiSecurity(r);
+        if (security == 4) {
+            Toast.makeText(this, getString(R.string.wifi_enterprise, r.SSID), Toast.LENGTH_SHORT).show();
+            open(systemIntent(Settings.ACTION_WIFI_SETTINGS));
+            return;
+        }
+        // A saved network joins without asking; one saved by Settings may refuse us, so then ask for its password.
+        if (savedId != null && wm.enableNetwork(savedId, true)) {
+            watchJoin(wm, r.SSID);
+            return;
+        }
+        if (security == 0) {
+            connectWifi(wm, r, security, null);
+            return;
+        }
+        askWifiPassword(wm, r, security);
+    }
+
+    private void askWifiPassword(WifiManager wm, ScanResult r, int security) {
+        View panel = getLayoutInflater().inflate(R.layout.dialog_wifi_password, root, false);
+        ((TextView) panel.findViewById(R.id.title)).setText(getString(R.string.wifi_join_title, r.SSID));
+        android.widget.EditText password = panel.findViewById(R.id.password);
+        TextView reveal = panel.findViewById(R.id.btnShowPassword);
+        TextView join = panel.findViewById(R.id.btnJoin);
+        final Dialog dialog = new Dialog(this);
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        dialog.setContentView(panel);
+        Window w = dialog.getWindow();
+        if (w != null) {
+            w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+            w.setLayout((int) (460 * density), ViewGroup.LayoutParams.WRAP_CONTENT);
+            w.setDimAmount(0.6f);
+            w.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE);
+        }
+        reveal.setOnClickListener(v -> {
+            boolean hidden = password.getTransformationMethod() != null;
+            password.setTransformationMethod(hidden ? null : android.text.method.PasswordTransformationMethod.getInstance());
+            password.setSelection(password.getText().length());
+            reveal.setText(hidden ? R.string.wifi_hide_password : R.string.wifi_show_password);
+        });
+        Runnable submit = () -> {
+            String key = password.getText().toString();
+            if (key.length() < (security == 1 ? 5 : 8)) {
+                password.requestFocus();
+                return;
+            }
+            dialog.dismiss();
+            connectWifi(wm, r, security, key);
+        };
+        join.setOnClickListener(v -> submit.run());
+        password.setOnEditorActionListener((v, actionId, event) -> {
+            submit.run();
+            return true;
+        });
+        dialog.show();
+        password.requestFocus();
+    }
+
+    private void connectWifi(WifiManager wm, ScanResult r, int security, String key) {
+        WifiConfiguration c = new WifiConfiguration();
+        c.SSID = "\"" + r.SSID + "\"";
+        if (security == 0) {
+            c.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.NONE);
+        } else if (security == 1) {
+            c.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.NONE);
+            c.wepKeys[0] = "\"" + key + "\"";
+            c.wepTxKeyIndex = 0;
+        } else if (security == 3) {
+            c.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.SAE);
+            c.preSharedKey = "\"" + key + "\"";
+        } else {
+            c.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.WPA_PSK);
+            c.preSharedKey = "\"" + key + "\"";
+        }
+        int id = wm.addNetwork(c);
+        if (id == -1 || !wm.enableNetwork(id, true)) {
+            Toast.makeText(this, getString(R.string.wifi_failed, r.SSID), Toast.LENGTH_LONG).show();
+            return;
+        }
+        watchJoin(wm, r.SSID);
+    }
+
+    /** Says when the TV is on the new network, or that it gave up after 20 seconds (usually a wrong password). */
+    private void watchJoin(WifiManager wm, String ssid) {
+        if (openPopup != null) openPopup.dismiss();
+        Toast.makeText(this, getString(R.string.wifi_connecting, ssid), Toast.LENGTH_SHORT).show();
+        final long until = System.currentTimeMillis() + 20_000L;
+        handler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                WifiInfo info = wm.getConnectionInfo();
+                boolean on = info != null && unquote(info.getSSID()).equals(ssid)
+                        && info.getSupplicantState() == android.net.wifi.SupplicantState.COMPLETED
+                        && info.getIpAddress() != 0;
+                if (on) {
+                    Toast.makeText(MainActivity.this, getString(R.string.wifi_now_connected, ssid), Toast.LENGTH_SHORT).show();
+                    updateWifiLabel();
+                } else if (System.currentTimeMillis() < until) {
+                    handler.postDelayed(this, 1000);
+                } else {
+                    Toast.makeText(MainActivity.this, getString(R.string.wifi_failed, ssid), Toast.LENGTH_LONG).show();
+                }
+            }
+        }, 1000);
+    }
+
+    // ---- quick panel -------------------------------------------------------------------------------
+
+    private static final int[] SLEEP_STEPS = {0, 15, 30, 60, 90};
+    private android.bluetooth.BluetoothA2dp a2dp;
+
+    /** Sleep timer, Picture & sound and Bluetooth headphones, in a panel beside the menu. */
+    private void showQuick(View anchor) {
+        View panel = getLayoutInflater().inflate(R.layout.popup_inputs, root, false);
+        LinearLayout rows = panel.findViewById(R.id.rows);
+        PopupWindow popup = glassPopup(panel, (int) (340 * density));
+        fillQuick(rows, popup);
+        panel.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
+        dropIn(popup, panel, anchor);
+        rows.getChildAt(0).requestFocus();
+        android.bluetooth.BluetoothAdapter bt = android.bluetooth.BluetoothAdapter.getDefaultAdapter();
+        if (bt != null && a2dp == null) {
+            bt.getProfileProxy(this, new android.bluetooth.BluetoothProfile.ServiceListener() {
+                @Override
+                public void onServiceConnected(int profile, android.bluetooth.BluetoothProfile proxy) {
+                    a2dp = (android.bluetooth.BluetoothA2dp) proxy;
+                }
+
+                @Override
+                public void onServiceDisconnected(int profile) {
+                    a2dp = null;
+                }
+            }, android.bluetooth.BluetoothProfile.A2DP);
+        }
+    }
+
+    private void fillQuick(LinearLayout rows, PopupWindow popup) {
+        rows.removeAllViews();
+        // Sleep timer: OK steps through Off, 15, 30, 60, 90 minutes; hold OK to sleep right now.
+        addInputRow(rows, popup, R.drawable.ic_moon, getString(R.string.sleep_timer), -1, () -> { });
+        View sleep = rows.getChildAt(rows.getChildCount() - 1);
+        TextView sleepStatus = sleep.findViewById(R.id.status);
+        sleepStatus.setVisibility(View.VISIBLE);
+        Runnable showSleep = () -> {
+            int left = SleepReceiver.minutesLeft(this);
+            sleepStatus.setText(left > 0 ? getString(R.string.sleep_in, left) : getString(R.string.sleep_off));
+            sleep.findViewById(R.id.dot).setVisibility(left > 0 ? View.VISIBLE : View.GONE);
+        };
+        showSleep.run();
+        sleep.setOnClickListener(v -> {
+            int left = SleepReceiver.minutesLeft(this), next = 0;
+            for (int step : SLEEP_STEPS) {
+                if (step > left) {
+                    next = step;
+                    break;
+                }
+            }
+            SleepReceiver.set(this, next);
+            Toast.makeText(this, next > 0 ? getString(R.string.sleep_set, next) : getString(R.string.sleep_cancelled),
+                    Toast.LENGTH_SHORT).show();
+            showSleep.run();
+        });
+        sleep.setOnLongClickListener(v -> {
+            popup.dismiss();
+            if (!OptimizeService.sleepNow()) Toast.makeText(this, R.string.sleep_unavailable, Toast.LENGTH_LONG).show();
+            return true;
+        });
+        addInputRow(rows, popup, R.drawable.ic_picture, getString(R.string.picture_sound), -1, () -> {
+            try {
+                startActivity(new Intent().setClassName("com.android.tv.settings",
+                        "com.android.tv.settings.device.displaysound.DisplaySoundActivity").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            } catch (Exception e) {
+                open(systemIntent(Settings.ACTION_DISPLAY_SETTINGS));
+            }
+        });
+        android.bluetooth.BluetoothAdapter bt = android.bluetooth.BluetoothAdapter.getDefaultAdapter();
+        int paired = 0;
+        if (bt != null && bt.getBondedDevices() != null) {
+            for (android.bluetooth.BluetoothDevice d : bt.getBondedDevices()) {
+                if (d.getBluetoothClass() != null && d.getBluetoothClass().getMajorDeviceClass()
+                        == android.bluetooth.BluetoothClass.Device.Major.AUDIO_VIDEO) paired++;
+            }
+        }
+        addInputRow(rows, popup, R.drawable.ic_bluetooth, getString(R.string.bluetooth), -1, () -> { });
+        View btRow = rows.getChildAt(rows.getChildCount() - 1);
+        TextView btStatus = btRow.findViewById(R.id.status);
+        btStatus.setText(paired > 0 ? getString(R.string.bt_paired, paired) : getString(R.string.bt_none));
+        btStatus.setVisibility(View.VISIBLE);
+        btRow.setOnClickListener(v -> {
+            fillBluetooth(rows, popup, bt);
+            rows.getChildAt(0).requestFocus();
+        });
+    }
+
+    /** Paired headphones and speakers: OK connects one; Pair new device opens Bluetooth settings. */
+    private void fillBluetooth(LinearLayout rows, PopupWindow popup, android.bluetooth.BluetoothAdapter bt) {
+        rows.removeAllViews();
+        java.util.Set<android.bluetooth.BluetoothDevice> devices = bt != null ? bt.getBondedDevices() : null;
+        List<android.bluetooth.BluetoothDevice> connected = a2dp != null ? a2dp.getConnectedDevices() : Collections.emptyList();
+        if (devices != null) {
+            for (android.bluetooth.BluetoothDevice d : devices) {
+                // Headphones and speakers only: the remote and game pads are paired too.
+                if (d.getBluetoothClass() == null || d.getBluetoothClass().getMajorDeviceClass()
+                        != android.bluetooth.BluetoothClass.Device.Major.AUDIO_VIDEO) continue;
+                String name = d.getName() != null ? d.getName() : d.getAddress();
+                boolean on = connected.contains(d);
+                addInputRow(rows, popup, R.drawable.ic_bluetooth, name, -1, () -> connectBluetooth(d, name));
+                View row = rows.getChildAt(rows.getChildCount() - 1);
+                TextView st = row.findViewById(R.id.status);
+                st.setText(on ? getString(R.string.connected) : "");
+                st.setVisibility(on ? View.VISIBLE : View.GONE);
+                row.findViewById(R.id.dot).setVisibility(on ? View.VISIBLE : View.GONE);
+            }
+        }
+        if (rows.getChildCount() > 0) addSeparator(rows);
+        addInputRow(rows, popup, R.drawable.ic_settings, getString(R.string.bt_pair_new), -1,
+                () -> open(bluetoothPairing()));
+    }
+
+    /** Google TV pairs headphones from its Accessories screen (CONNECT_INPUT); others have Bluetooth settings. */
+    private Intent bluetoothPairing() {
+        Intent pair = new Intent("com.google.android.intent.action.CONNECT_INPUT");
+        if (pair.resolveActivity(getPackageManager()) != null) return pair;
+        return systemIntent(Settings.ACTION_BLUETOOTH_SETTINGS);
+    }
+
+    /** BluetoothA2dp.connect is not public API; Android allows it for apps targeting 28. Settings if refused. */
+    private void connectBluetooth(android.bluetooth.BluetoothDevice d, String name) {
+        boolean asked = false;
+        try {
+            if (a2dp != null) {
+                java.lang.reflect.Method connect = android.bluetooth.BluetoothA2dp.class
+                        .getMethod("connect", android.bluetooth.BluetoothDevice.class);
+                asked = Boolean.TRUE.equals(connect.invoke(a2dp, d));
+            }
+        } catch (Exception ignored) {
+        }
+        if (asked) Toast.makeText(this, getString(R.string.bt_connecting, name), Toast.LENGTH_SHORT).show();
+        else open(bluetoothPairing());
+    }
+
+    /**
+     * Android switches an app's accessibility services off whenever the app is force-stopped. With
+     * WRITE_SECURE_SETTINGS (granted once over ADB) Home puts the Input key and Optimize services back on
+     * by itself; without it nothing happens and Optimize asks the owner to turn them on in Settings.
+     */
+    private void ensureServices() {
+        if (checkSelfPermission(android.Manifest.permission.WRITE_SECURE_SETTINGS)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED) return;
+        try {
+            android.content.ContentResolver cr = getContentResolver();
+            String on = Settings.Secure.getString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
+            StringBuilder want = new StringBuilder(on == null || "null".equals(on) ? "" : on);
+            for (Class<?> svc : new Class<?>[]{InputKeyService.class, OptimizeService.class}) {
+                String name = new ComponentName(this, svc).flattenToString();
+                String shortName = new ComponentName(this, svc).flattenToShortString();
+                if (want.indexOf(name) >= 0 || want.indexOf(shortName) >= 0) continue;
+                if (want.length() > 0) want.append(':');
+                want.append(shortName);
+            }
+            if (!want.toString().equals(on)) {
+                Settings.Secure.putString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, want.toString());
+                Settings.Secure.putInt(cr, Settings.Secure.ACCESSIBILITY_ENABLED, 1);
+            }
+        } catch (SecurityException ignored) {
+        }
+    }
+
+    // ---- optimize ----------------------------------------------------------------------------------
+
+    private boolean optimizing;
+
+    /**
+     * Frees memory by force-stopping the apps that have run since they were last stopped, through
+     * OptimizeService (Android 14 no longer lets a launcher close other apps any other way), then says how
+     * much came back. The keyboard, accessibility apps, Live TV, the Play Store and core system apps are left alone.
+     */
+    private void optimize(View row) {
+        if (optimizing) return;
+        if (!OptimizeService.available()) {
+            Toast.makeText(this, R.string.optimize_enable, Toast.LENGTH_LONG).show();
+            open(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+            return;
+        }
+        Set<String> keep = new HashSet<>(Arrays.asList(getPackageName(), liveTvPkg,
+                "com.android.vending", "com.android.tv.settings"));
+        String ime = Settings.Secure.getString(getContentResolver(), Settings.Secure.DEFAULT_INPUT_METHOD);
+        if (ime != null) keep.add(ime.split("/")[0]);
+        String a11y = Settings.Secure.getString(getContentResolver(), Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
+        if (a11y != null) for (String svc : a11y.split(":")) keep.add(svc.split("/")[0]);
+        List<String> pkgs = new ArrayList<>(), labels = new ArrayList<>();
+        for (AppAdapter.Entry e : adapter.apps()) {
+            if (keep.contains(e.pkg) || pkgs.contains(e.pkg)) continue;
+            try {
+                ApplicationInfo ai = getPackageManager().getApplicationInfo(e.pkg, 0);
+                boolean core = (ai.flags & ApplicationInfo.FLAG_SYSTEM) != 0
+                        && (ai.flags & ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0;
+                // FLAG_STOPPED: never run since its last force stop, so nothing of it is in memory.
+                if (core || (ai.flags & ApplicationInfo.FLAG_STOPPED) != 0) continue;
+            } catch (android.content.pm.PackageManager.NameNotFoundException ex) {
+                continue;
+            }
+            pkgs.add(e.pkg);
+            labels.add(e.label);
+        }
+        android.app.ActivityManager am = getSystemService(android.app.ActivityManager.class);
+        android.app.ActivityManager.MemoryInfo before = new android.app.ActivityManager.MemoryInfo();
+        am.getMemoryInfo(before);
+        if (pkgs.isEmpty()) {
+            showOptimized(row, 0, before.availMem, before.totalMem);
+            return;
+        }
+        optimizing = true;
+        OptimizeService.run(pkgs, labels, stopped -> handler.postDelayed(() -> {
+            optimizing = false;
+            if (isFinishing()) return;
+            android.app.ActivityManager.MemoryInfo after = new android.app.ActivityManager.MemoryInfo();
+            am.getMemoryInfo(after);
+            if (!menuOpen) row.requestFocus();
+            showOptimized(row, after.availMem - before.availMem, after.availMem, after.totalMem);
+        }, 900));
+    }
+
+    private void showOptimized(View anchor, long freed, long free, long total) {
+        View panel = getLayoutInflater().inflate(R.layout.popup_inputs, root, false);
+        LinearLayout rows = panel.findViewById(R.id.rows);
+        PopupWindow popup = glassPopup(panel, (int) (320 * density));
+        String title = freed >= 20L << 20
+                ? getString(R.string.optimize_freed, android.text.format.Formatter.formatShortFileSize(this, freed))
+                : getString(R.string.optimize_nothing);
+        addInputRow(rows, popup, R.drawable.ic_optimize, title, -1, () -> { });
+        TextView status = rows.getChildAt(0).findViewById(R.id.status);
+        status.setText(getString(R.string.optimize_free_now,
+                android.text.format.Formatter.formatShortFileSize(this, free),
+                android.text.format.Formatter.formatShortFileSize(this, total)));
+        status.setVisibility(View.VISIBLE);
+        panel.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
+        popup.setWidth(Math.max((int) (320 * density), panel.getMeasuredWidth()));
+        dropIn(popup, panel, anchor);
+        rows.getChildAt(0).requestFocus();
+        handler.postDelayed(() -> {
+            if (popup.isShowing()) popup.dismiss();
+        }, 4000);
+    }
+
     // ---- launcher settings and module cards -------------------------------------------------------
 
     /** Keep a normal Settings click for the TV; the launcher's choices live behind hold OK. */
     private void showSettingsMenu() {
-        View anchor = findViewById(R.id.btnSettings);
+        View anchor = findViewById(R.id.navSettings);
         View panel = getLayoutInflater().inflate(R.layout.popup_inputs, root, false);
         LinearLayout rows = panel.findViewById(R.id.rows);
         PopupWindow popup = glassPopup(panel, (int) (200 * density));
@@ -1123,7 +1657,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         if (moduleCards) addSettingsMenuRow(rows, popup, R.string.module_cards, this::showModuleCards);
         panel.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
         popup.setWidth(Math.max((int) (200 * density), panel.getMeasuredWidth()));
-        dropIn(popup, panel, anchor, Gravity.END);
+        dropIn(popup, panel, anchor);
         rows.getChildAt(0).requestFocus();
     }
 
@@ -1252,7 +1786,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     }
 
     private void showModuleCardsNow() {
-        View anchor = findViewById(R.id.btnSettings);
+        View anchor = findViewById(R.id.navSettings);
         View panel = getLayoutInflater().inflate(R.layout.popup_cards, root, false);
         LinearLayout rows = panel.findViewById(R.id.rows);
         final PopupWindow popup = glassPopup(panel, (int) (400 * density));
@@ -1284,9 +1818,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         panel.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
         int[] at = new int[2];
         anchor.getLocationInWindow(at);
-        int room = root.getHeight() - (at[1] + anchor.getHeight()) - (int) (34 * density);
+        int room = root.getHeight() - at[1] - (int) (34 * density);
         popup.setHeight(Math.min(panel.getMeasuredHeight(), Math.max(room, (int) (120 * density))));
-        dropIn(popup, panel, anchor, Gravity.END);
+        dropIn(popup, panel, anchor);
         rows.getChildAt(0).requestFocus();
     }
 

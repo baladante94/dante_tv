@@ -7,8 +7,19 @@
     <uses-feature android:name="android.hardware.wifi" android:required="false" />
     <uses-feature android:name="android.hardware.location.gps" android:required="false" />
 
+    <!-- Trending rows: Netflix's Top 10 file and TMDB, fetched in the background a few times a day. -->
+    <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <!-- Joining a network from the menu's Wi-Fi panel (WifiManager.addNetwork/enableNetwork, see build.gradle targetSdk). -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <!-- Lets Home switch its own accessibility services back on after Android turns them off (a force stop does).
+         Development permission: granted once over ADB (pm grant), never at install. -->
+    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
+    <!-- Quick panel: list paired Bluetooth headphones and connect one. -->
+    <uses-permission android:name="android.permission.BLUETOOTH" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
     <!-- Needed since Android 10 to read the Wi-Fi network name for the network pill. Never requested at
          runtime: build-and-install grants it with pm grant, so lint's Android 12 "ask for COARSE with
          FINE" rule does not apply here. -->
@@ -99,6 +110,21 @@
         </service>
 
         <!-- The remote's Input button (KEYCODE_TV) opens the input switcher; see InputKeyService. -->
+        <receiver
+            android:name=".SleepReceiver"
+            android:exported="false" />
+        <service
+            android:name=".OptimizeService"
+            android:exported="false"
+            android:label="@string/optimize_service_name"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/optimize_service" />
+        </service>
         <service
             android:name=".InputKeyService"
             android:exported="false"

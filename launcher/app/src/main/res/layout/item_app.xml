@@ -47,6 +47,15 @@
             android:textSize="13sp"
             android:fontFamily="@font/outfit"
             android:visibility="gone" />
+
+        <!-- Specular glint that sweeps across the tile when it takes focus; width set in code. -->
+        <View
+            android:id="@+id/glint"
+            android:layout_width="80dp"
+            android:layout_height="match_parent"
+            android:background="@drawable/glint"
+            android:alpha="0"
+            android:importantForAccessibility="no" />
     </FrameLayout>
 
     <TextView

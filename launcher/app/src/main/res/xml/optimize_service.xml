@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Only ever reads the TV Settings app, and only while an Optimize run is going. -->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:packageNames="com.android.tv.settings"
+    android:notificationTimeout="80"
+    android:canRetrieveWindowContent="true"
+    android:description="@string/optimize_service_description" />

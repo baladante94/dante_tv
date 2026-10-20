@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- One Top Shelf card: the picture (sized in code), then its title and, on the big card, a details line. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:clipChildren="false"
+    android:clipToPadding="false">
+
+    <ImageView
+        android:id="@+id/shelfImage"
+        android:layout_width="100dp"
+        android:layout_height="100dp"
+        android:scaleType="centerCrop"
+        android:background="#FF1C1C1E"
+        android:focusable="true"
+        android:clickable="true"
+        android:contentDescription="@null" />
+
+    <TextView
+        android:id="@+id/shelfName"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:singleLine="true"
+        android:ellipsize="end"
+        android:textColor="#F2FFFFFF"
+        android:textSize="15sp"
+        android:fontFamily="@font/outfit_medium" />
+
+    <TextView
+        android:id="@+id/shelfMeta"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="1dp"
+        android:singleLine="true"
+        android:ellipsize="end"
+        android:textColor="#99FFFFFF"
+        android:textSize="12sp"
+        android:fontFamily="@font/outfit_regular" />
+</LinearLayout>

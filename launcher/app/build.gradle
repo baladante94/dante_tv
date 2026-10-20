@@ -9,7 +9,9 @@ android {
     defaultConfig {
         applicationId 'com.gathin.tvhome'
         minSdk 26
-        targetSdk 34
+        // 28, the oldest this TV runs without a warning: Android only lets apps targeting 28 or lower
+        // join a Wi-Fi network directly (WifiManager.addNetwork), which the menu's Wi-Fi panel needs.
+        targetSdk 28
         versionCode 4
         versionName '2.3'
     }
@@ -23,6 +25,10 @@ android {
             // Sideloaded over ADB, never published: sign with the debug key so it installs over a debug build.
             signingConfig signingConfigs.debug
         }
+    }
+
+    lint {
+        disable 'ExpiredTargetSdkVersion'
     }
 
     compileOptions {

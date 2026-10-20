@@ -58,6 +58,8 @@ final class Config {
     final int skyIntensity;
     /** Full-screen picture behind the launcher, or null for the plain colour. */
     final File wallpaper;
+    /** TMDB API read token for the trending rows; empty leaves them off. Only ever set in a theme's config.json. */
+    final String tmdbToken;
     /** Whether the overlay file was present and parsed. */
     final boolean overlayApplied;
 
@@ -66,7 +68,7 @@ final class Config {
                    int columns, int rowsBelowDock, boolean animations, boolean advancedEffects,
                    boolean shamsiDate, boolean moduleCards, boolean reducedMotion, String vpnApp,
                    boolean showHomeSettingsShortcut, int backgroundColor, int skyIntensity,
-                   File wallpaper, boolean overlayApplied) {
+                   File wallpaper, String tmdbToken, boolean overlayApplied) {
         this.dockApps = Collections.unmodifiableList(dockApps);
         this.hiddenApps = Collections.unmodifiableList(hiddenApps);
         this.liveTvPackage = liveTvPackage;
@@ -86,6 +88,7 @@ final class Config {
         this.backgroundColor = backgroundColor;
         this.skyIntensity = skyIntensity;
         this.wallpaper = wallpaper;
+        this.tmdbToken = tmdbToken;
         this.overlayApplied = overlayApplied;
     }
 
@@ -114,6 +117,7 @@ final class Config {
         boolean homeSettings = res.getBoolean(R.bool.show_home_settings_shortcut);
         int background = 0xFF000000;
         int skyIntensity = res.getInteger(R.integer.sky_intensity);
+        String tmdbToken = "";
         boolean applied = false;
 
         File dir = dir(ctx);
@@ -139,6 +143,7 @@ final class Config {
             homeSettings = bool(json, "show_home_settings_shortcut", homeSettings);
             background = color(json, "background_color", background);
             skyIntensity = integer(json, "sky_intensity", skyIntensity, 0, 100);
+            tmdbToken = string(json, "tmdb_token", tmdbToken);
         }
         // A theme push or reset invalidates choices made on the TV. On first use, remember the
         // current theme without clearing choices from an older launcher version.
@@ -156,7 +161,7 @@ final class Config {
         return new Config(dock, hidden, liveTv, liveTvAction, panelService, panelAction, inputAction,
                 Math.max(1, columns), Math.max(0, rowsBelow), animations, advancedEffects,
                 shamsi, moduleCards, reducedMotion, vpn, homeSettings, background,
-                Math.max(0, Math.min(100, skyIntensity)), wallpaper, applied);
+                Math.max(0, Math.min(100, skyIntensity)), wallpaper, tmdbToken, applied);
     }
 
     private static void syncThemeChoices(SharedPreferences choices, File dir, File config) {

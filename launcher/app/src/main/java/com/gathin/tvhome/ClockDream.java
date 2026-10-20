@@ -7,13 +7,14 @@ import android.os.Handler;
 import android.os.Looper;
 import android.service.dreams.DreamService;
 import android.view.View;
+import android.widget.ImageView;
 
 import java.util.Random;
 
 /**
- * Screensaver: the launcher's thin clock and date on black, over a slow ambient glow.
- * Every minute the clock drifts to a new spot and the glow shifts colour, so nothing burns in.
- * No network, no images: cheap enough for a 1 GB TV.
+ * Screensaver: the launcher's thin clock and date over the theme's wallpaper (dimmed) and a slow ambient glow,
+ * Every minute the clock drifts to a new spot and the glow shifts
+ * colour, so nothing burns in. No network: cheap enough for a 1 GB TV.
  */
 public class ClockDream extends DreamService {
 
@@ -27,7 +28,6 @@ public class ClockDream extends DreamService {
     private GradientDrawable glow;
     private int colorIndex;
     private int glowColor;
-
     private final Runnable tick = new Runnable() {
         @Override
         public void run() {
@@ -46,6 +46,17 @@ public class ClockDream extends DreamService {
         setContentView(R.layout.dream_clock);
 
         content = findViewById(R.id.dreamContent);
+        Config cfg = Config.load(this);
+        if (cfg.wallpaper != null) {
+            android.graphics.BitmapFactory.Options opts = new android.graphics.BitmapFactory.Options();
+            opts.inPreferredConfig = android.graphics.Bitmap.Config.RGB_565;
+            android.graphics.Bitmap wall = android.graphics.BitmapFactory.decodeFile(cfg.wallpaper.getPath(), opts);
+            if (wall != null) {
+                ImageView w = findViewById(R.id.dreamWallpaper);
+                w.setImageBitmap(wall);
+                w.setVisibility(View.VISIBLE);
+            }
+        }
         View ambient = findViewById(R.id.dreamAmbient);
         glow = new GradientDrawable();
         glow.setGradientType(GradientDrawable.RADIAL_GRADIENT);
