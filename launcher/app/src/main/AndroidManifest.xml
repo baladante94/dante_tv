@@ -109,7 +109,7 @@
             </intent-filter>
         </service>
 
-        <!-- The remote's Input button (KEYCODE_TV) opens the input switcher; see InputKeyService. -->
+        <!-- The remote's Input button (KEYCODE_TV or KEYCODE_TV_INPUT) opens the input switcher; see InputKeyService. -->
         <activity
             android:name=".ShelfSetupActivity"
             android:exported="false"

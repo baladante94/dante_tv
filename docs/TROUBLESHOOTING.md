@@ -122,7 +122,7 @@ tools/tv.py 'dumpsys accessibility'
 | Helper | Component in the enabled-services list | Key it filters |
 | --- | --- | --- |
 | Home button | `com.dante.tv/.HomeKeyService` | `KEYCODE_ALL_APPS` (not an ordinary `KEYCODE_HOME`) |
-| Input button | `com.dante.tv/.InputKeyService` | `KEYCODE_TV` |
+| Input button | `com.dante.tv/.InputKeyService` | `KEYCODE_TV`, `KEYCODE_TV_INPUT` |
 
 - **Enabled** means the component is in that user's colon-separated list (the class may be written in
   full, `com.dante.tv/com.dante.tv.HomeKeyService`). Match the whole component.
