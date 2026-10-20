@@ -358,16 +358,27 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
     private Drawable loadBanner(PackageManager pm, ResolveInfo ri) {
         int id = ri.activityInfo.banner;
         if (id == 0) id = ri.activityInfo.applicationInfo.banner;
+        Drawable banner = null;
         if (id != 0) {
             try {
                 Resources resources = pm.getResourcesForApplication(ri.activityInfo.applicationInfo);
                 // Keep at least xhdpi detail rather than downsampling artwork before the focus zoom.
                 int density = Math.max(DisplayMetrics.DENSITY_XHIGH, ctx.getResources().getDisplayMetrics().densityDpi);
-                return resources.getDrawableForDensity(id, density, null);
+                banner = resources.getDrawableForDensity(id, density, null);
             } catch (PackageManager.NameNotFoundException | Resources.NotFoundException ignored) {
             }
         }
-        return ri.activityInfo.loadBanner(pm);
+        if (banner == null) banner = ri.activityInfo.loadBanner(pm);
+        // A square "banner" counts as none: the tile shows the app's icon and name instead of a blur.
+        return banner != null && isBannerShaped(banner.getIntrinsicWidth(), banner.getIntrinsicHeight()) ? banner : null;
+    }
+
+    /**
+     * Some apps declare a small square image as their banner (Rockchip's Media Center ships a 64 px one). Cropped
+     * over a 16:9 tile it is a blur. A drawable with no intrinsic size (a colour, a shape) still fills the tile.
+     */
+    static boolean isBannerShaped(int width, int height) {
+        return width <= 0 || height <= 0 || width >= height * 1.4f;
     }
 
     @NonNull
