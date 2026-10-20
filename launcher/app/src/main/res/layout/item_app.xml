@@ -45,7 +45,7 @@
             android:ellipsize="end"
             android:textColor="#FFFFFFFF"
             android:textSize="13sp"
-            android:fontFamily="@font/outfit"
+            android:fontFamily="@font/outfit_regular"
             android:visibility="gone" />
 
         <!-- Specular glint that sweeps across the tile when it takes focus; width set in code. -->

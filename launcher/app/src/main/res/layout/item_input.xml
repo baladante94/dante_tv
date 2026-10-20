@@ -45,6 +45,6 @@
         android:textColor="@drawable/pill_text_dim"
         android:duplicateParentState="true"
         android:textSize="11sp"
-        android:fontFamily="@font/outfit"
+        android:fontFamily="@font/outfit_regular"
         android:letterSpacing="0.04" />
 </LinearLayout>
