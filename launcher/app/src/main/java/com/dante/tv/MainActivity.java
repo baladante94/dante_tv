@@ -1202,6 +1202,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
         boolean sawNonHdmi = false;
         String tunerId = null;
         boolean tunerIsHw = false;
+        boolean tunerIsAnalog = false;
         if (tim != null) {
             List<TvInputInfo> inputs = new ArrayList<>(tim.getTvInputList());
             // HDMI ports first in port order, then AV and the rest.
@@ -1224,10 +1225,20 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
                         && (info.getServiceInfo().applicationInfo.flags & ApplicationInfo.FLAG_SYSTEM) != 0) {
                     // Prefer a hardware tuner: the framework names those ".../HW<n>". System apps such as
                     // AirPlay also register software inputs of type TUNER and may sort first (seen on TCL G05).
+                    // Among tuners of the same kind, skip an analog input when another is present.
+                    // MediaTek names them AnalogInputService and TunerInputService; alphabetical order
+                    // would pick the analog one, and Live TV then opens a dead ATV source.
                     boolean hw = info.getId().matches(".*/HW\\d+$");
-                    if (tunerId == null || (hw && !tunerIsHw) || (hw == tunerIsHw && info.getId().compareTo(tunerId) < 0)) {
+                    boolean analog = info.getId().toLowerCase(Locale.ROOT).contains("analog");
+                    boolean better = tunerId == null
+                            || (hw && !tunerIsHw)
+                            || (hw == tunerIsHw && tunerIsAnalog && !analog)
+                            || (hw == tunerIsHw && analog == tunerIsAnalog
+                                    && info.getId().compareTo(tunerId) < 0);
+                    if (better) {
                         tunerId = info.getId();
                         tunerIsHw = hw;
+                        tunerIsAnalog = analog;
                     }
                 }
                 // Inputs hidden in the TV's Settings > Inputs stay out of the menu too.
@@ -1255,9 +1266,16 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
         }
         Intent liveTv = liveTvIntent();
         if (liveTv != null && tunerId != null) {
-            liveTv = new Intent(Intent.ACTION_VIEW)
-                    .setDataAndType(TvContract.buildChannelUriForPassthroughInput(tunerId), "vnd.android.cursor.item/channel")
+            // Tune that input only when the Live TV package itself handles the URI.
+            // The unrestricted input player also resolves it (that is how HDMI opens), but on the
+            // AIWA AI PONT SA that player stays black, and the Live TV package does not handle the
+            // URI at all, which used to toast "Not available on this TV". Keep the leanback activity
+            // then: it is the same path as the Live TV tile. Do not drop the package restriction.
+            Intent tuned = new Intent(Intent.ACTION_VIEW)
+                    .setDataAndType(TvContract.buildChannelUriForPassthroughInput(tunerId),
+                            "vnd.android.cursor.item/channel")
                     .setPackage(liveTvPkg);
+            if (tuned.resolveActivity(getPackageManager()) != null) liveTv = tuned;
         }
         if (liveTv != null) {
             if (rows.getChildCount() > 0) addSeparator(rows);
