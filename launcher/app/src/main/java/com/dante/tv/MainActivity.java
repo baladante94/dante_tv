@@ -1211,11 +1211,27 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
                 if (ha != hb) return ha ? -1 : 1;
                 return String.valueOf(a.loadLabel(this)).compareToIgnoreCase(String.valueOf(b.loadLabel(this)));
             });
+            // An HDMI-CEC device (an Apple TV, a soundbar) gets an input of its own whose parent is the
+            // port it sits on, so the port and the device would each get a row (Vestel MT7332: "HDMI 1"
+            // and "HDMI Apple TV"). The device takes its port's row instead, and a bare port is listed
+            // only when nothing on it speaks CEC.
+            Set<String> inputIds = new HashSet<>();
+            for (TvInputInfo info : inputs) inputIds.add(info.getId());
+            Map<String, List<TvInputInfo>> cecDevices = new HashMap<>();
+            for (TvInputInfo info : inputs) {
+                String parent = info.getParentId();
+                if (parent == null || !inputIds.contains(parent)) continue;
+                if (!info.isPassthroughInput() || info.isHidden(this)) continue;
+                List<TvInputInfo> onPort = cecDevices.get(parent);
+                if (onPort == null) cecDevices.put(parent, onPort = new ArrayList<>());
+                onPort.add(info);
+            }
             // Some TVs (Sony) report every HDMI port as connected whether or not anything is plugged in,
             // so drop the HDMI status then. A TV with every port really in use loses it too.
             int hdmiPorts = 0, hdmiConnected = 0;
             for (TvInputInfo info : inputs) {
                 if (!info.isPassthroughInput() || info.getType() != TvInputInfo.TYPE_HDMI) continue;
+                if (info.getParentId() != null && inputIds.contains(info.getParentId())) continue;
                 hdmiPorts++;
                 if (tim.getInputState(info.getId()) == TvInputManager.INPUT_STATE_CONNECTED) hdmiConnected++;
             }
@@ -1243,19 +1259,35 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
                 }
                 // Inputs hidden in the TV's Settings > Inputs stay out of the menu too.
                 if (!info.isPassthroughInput() || info.isHidden(this)) continue;
+                // A CEC device's row is added with its port, below.
+                if (info.getParentId() != null && inputIds.contains(info.getParentId())) continue;
                 CharSequence l = info.loadLabel(this);
                 String label = l == null ? info.getId() : l.toString();
                 boolean hdmi = info.getType() == TvInputInfo.TYPE_HDMI;
                 if (hdmi && !label.toUpperCase(Locale.ROOT).contains("HDMI")) label = "HDMI " + label;
-                // The name given in Settings > Inputs (e.g. "Fire TV") goes first, the port after it.
                 CharSequence custom = info.loadCustomLabel(this);
-                if (custom != null && custom.length() > 0 && !custom.toString().equals(label)) {
-                    label = custom + " \u00B7 " + label;
-                }
-                final String id = info.getId();
-                int state = hdmi && hdmiStateBogus ? -1 : tim.getInputState(id);
+                boolean named = custom != null && custom.length() > 0 && !custom.toString().equals(label);
                 if (!hdmi && rows.getChildCount() > 0 && !sawNonHdmi) addSeparator(rows);
                 if (!hdmi) sawNonHdmi = true;
+                List<TvInputInfo> devices = cecDevices.get(info.getId());
+                if (devices != null) {
+                    // "Apple TV · HDMI 1": the device's own name (or the one given to it or to its port in
+                    // Settings > Inputs), then the port. Opening the device's input also makes it the CEC
+                    // active source, which wakes it.
+                    for (TvInputInfo device : devices) {
+                        CharSequence name = device.loadCustomLabel(this);
+                        if (name == null || name.length() == 0) name = named ? custom : device.loadLabel(this);
+                        String deviceLabel = name == null || name.length() == 0 ? label : name + " \u00B7 " + label;
+                        final String deviceId = device.getId();
+                        int state = hdmiStateBogus ? -1 : tim.getInputState(deviceId);
+                        addInputRow(rows, popup, R.drawable.ic_input, deviceLabel, state, () -> openInput(deviceId));
+                    }
+                    continue;
+                }
+                // The name given in Settings > Inputs (e.g. "MacBook Pro") goes first, the port after it.
+                if (named) label = custom + " \u00B7 " + label;
+                final String id = info.getId();
+                int state = hdmi && hdmiStateBogus ? -1 : tim.getInputState(id);
                 addInputRow(rows, popup, hdmi ? R.drawable.ic_input : R.drawable.ic_av, label, state,
                         () -> openInput(id));
             }
