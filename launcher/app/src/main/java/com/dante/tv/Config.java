@@ -4,6 +4,7 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.res.Resources;
 import android.graphics.Color;
+import android.os.Environment;
 import android.util.Log;
 
 import org.json.JSONArray;
@@ -11,6 +12,8 @@ import org.json.JSONObject;
 
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -126,7 +129,8 @@ final class Config {
 
         File dir = dir(ctx);
         File file = dir != null ? new File(dir, FILE_NAME) : null;
-        JSONObject json = read(file);
+        boolean mounted = Environment.MEDIA_MOUNTED.equals(Environment.getExternalStorageState());
+        JSONObject json = readOverlay(ctx, file, mounted);
         if (json != null) {
             applied = true;
             dock = stringList(json, "dock_apps", dock);
@@ -153,7 +157,8 @@ final class Config {
         // A theme push or reset invalidates choices made on the TV. On first use, remember the
         // current theme without clearing choices from an older launcher version.
         SharedPreferences choices = ctx.getSharedPreferences(SETTINGS_NAME, Context.MODE_PRIVATE);
-        syncThemeChoices(choices, dir, file);
+        // Unmounted storage looks like a theme reset; compare only once the file is readable.
+        if (mounted) syncThemeChoices(choices, dir, file);
         int chosenColumns = choices.getInt("columns", columns);
         if (chosenColumns >= 4 && chosenColumns <= 7) columns = chosenColumns;
         animations = choices.getBoolean("animations", animations);
@@ -203,6 +208,27 @@ final class Config {
     }
 
     /** Reads and parses the overlay; any problem means "no overlay", never a crash on the home screen. */
+    /**
+     * The overlay, or before external storage is mounted, the copy kept from the last time it was read. Home can
+     * start before the card is mounted (seen at every boot on a Xiaomi MiTV-MTEQ0), and without the copy it comes
+     * up with the built-in dock order. A missing file on mounted storage still means no overlay.
+     */
+    private static JSONObject readOverlay(Context ctx, File file, boolean mounted) {
+        File copy = new File(ctx.getFilesDir(), FILE_NAME);
+        if (!mounted) return read(copy);
+        JSONObject json = read(file);
+        if (json == null) {
+            copy.delete();
+        } else {
+            try (FileOutputStream out = new FileOutputStream(copy)) {
+                out.write(json.toString().getBytes(StandardCharsets.UTF_8));
+            } catch (IOException e) {
+                Log.w(TAG, "could not keep a copy of " + file + ": " + e.getMessage());
+            }
+        }
+        return json;
+    }
+
     private static JSONObject read(File file) {
         if (file == null || !file.isFile()) return null;
         if (file.length() > 64 * 1024) {
