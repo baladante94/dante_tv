@@ -46,6 +46,7 @@ import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewTreeObserver;
 import android.view.Window;
 import android.view.animation.AnimationUtils;
 import android.view.animation.LayoutAnimationController;
@@ -117,6 +118,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
     /** The tile entrance plays once per process, not on every return to Home. */
     private static boolean entered;
     private View clockBlock;
+    /** The network label's icon as last set, so a refresh that changes nothing does not lay the menu out again. */
+    private int wifiIconRes;
+    /** The Wi-Fi and Inputs labels have been filled in once; later resumes refresh them after the first frame. */
+    private boolean pillsShown;
     private TextView shamsiDate;
     private boolean shamsi;
     /** Optional time-of-day backdrop (config.xml, sky_intensity); 0 keeps it hidden. */
@@ -425,8 +430,16 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
         rebuildOnResume = false;
         ensureServices();
         updateGreeting();
-        updateWifiLabel();
-        updateInputsButton();
+        // The Wi-Fi and Inputs labels keep their state while Home is in the background and callbacks update them, so
+        // this refresh only catches anything missed. Its binder calls (WifiManager.getConnectionInfo mostly) would
+        // hold up the first frame back on Home, so after the first resume it runs once that frame is drawn.
+        if (pillsShown) {
+            refreshPillsAfterNextDraw();
+        } else {
+            updateWifiLabel();
+            updateInputsButton();
+            pillsShown = true;
+        }
         // New trending rows arrive in the background; show them the next time Home is not in use.
         // A refresh can finish while another Home instance is on screen (Home restarts after setup): an empty
         // shelf rereads what is on disk each time Home comes back.
@@ -1131,11 +1144,14 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
             text = TextUtils.ellipsize(text, paint, Math.max(0, room), TextUtils.TruncateAt.END).toString();
             SpannableString label = new SpannableString(text + " " + badge);
             label.setSpan(span, text.length() + 1, label.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-            wifiLabel.setText(label);
-        } else {
+            if (!TextUtils.equals(wifiLabel.getText(), label)) wifiLabel.setText(label);
+        } else if (!TextUtils.equals(wifiLabel.getText(), text)) {
             wifiLabel.setText(text);
         }
-        wifiIcon.setImageResource(icon);
+        if (icon != wifiIconRes) {
+            wifiIconRes = icon;
+            wifiIcon.setImageResource(icon);
+        }
     }
 
     /** The network pill opens the VPN app when one is configured and installed, otherwise Wi-Fi settings. */
@@ -1768,6 +1784,24 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
         }
         if (asked) Toast.makeText(this, getString(R.string.bt_connecting, name), Toast.LENGTH_SHORT).show();
         else open(bluetoothPairing());
+    }
+
+    private void refreshPillsAfterNextDraw() {
+        root.getViewTreeObserver().addOnPreDrawListener(new ViewTreeObserver.OnPreDrawListener() {
+            @Override
+            public boolean onPreDraw() {
+                root.getViewTreeObserver().removeOnPreDrawListener(this);
+                // Posted from inside the frame's traversal, so it runs after that frame is drawn. A post straight
+                // from onResume would run first: the frame is only scheduled after onResume returns.
+                handler.post(() -> {
+                    if (isDestroyed()) return;
+                    updateWifiLabel();
+                    updateInputsButton();
+                });
+                return true;
+            }
+        });
+        root.invalidate();   // a resume that changes nothing on screen still draws once, so the refresh runs
     }
 
     /**
