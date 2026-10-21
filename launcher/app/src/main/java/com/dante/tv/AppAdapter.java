@@ -12,6 +12,7 @@ import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Outline;
+import android.graphics.PixelFormat;
 import android.graphics.Rect;
 import android.graphics.drawable.Drawable;
 import android.net.Uri;
@@ -433,6 +434,9 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         h.banner.setTranslationY(0f);
         h.glint.animate().cancel();
         h.glint.setAlpha(0f);
+        // A fully opaque banner covers the whole card (centerCrop), so the card's own fill under it is drawn for
+        // nothing on every frame; keep it under banners with transparent parts and under icon tiles.
+        h.card.setBackground(e.banner != null && e.banner.getOpacity() == PixelFormat.OPAQUE ? null : h.cardBackground);
         if (e.banner != null) {
             h.banner.setImageDrawable(e.banner);
             h.banner.setVisibility(View.VISIBLE);
@@ -592,6 +596,8 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
 
     static final class Holder extends RecyclerView.ViewHolder {
         final View card;
+        /** item_app.xml's tile_bg: the dark card behind an icon tile, or behind a banner that has transparent parts. */
+        final Drawable cardBackground;
         final ImageView banner;
         final ImageView icon;
         final TextView label;
@@ -605,6 +611,7 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
                boolean reducedMotion) {
             super(v);
             card = v.findViewById(R.id.card);
+            cardBackground = card.getBackground();
             banner = v.findViewById(R.id.banner);
             icon = v.findViewById(R.id.icon);
             label = v.findViewById(R.id.label);
