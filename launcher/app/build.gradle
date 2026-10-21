@@ -12,8 +12,8 @@ android {
         // 28, the oldest this TV runs without a warning: Android only lets apps targeting 28 or lower
         // join a Wi-Fi network directly (WifiManager.addNetwork), which the menu's Wi-Fi panel needs.
         targetSdk 28
-        versionCode 5
-        versionName '1.0.0'
+        versionCode 6
+        versionName '1.1.0'
     }
 
     // The release key lives outside the repo; keystore.properties (git-ignored) points at it. Without it, release
