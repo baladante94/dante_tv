@@ -147,6 +147,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
     private boolean promptsPaused;
     /** Rebuild the tiles on resume: Home was fully hidden by an app, or Home was pressed. Not after a side panel such as Wi-Fi settings. */
     private boolean rebuildOnResume = true;
+    /** Between onStop and onStart: Home was fully covered by an app, not just by the translucent quick panel. */
+    private boolean stopped;
     /** The Inputs or Module cards dropdown while one is open, so onPause can close it. */
     private PopupWindow openPopup;
 
@@ -403,12 +405,19 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
         closeMenu();
         lastFocused = 0;
         lastFocusedKey = adapter.getItemCount() > 0 ? adapter.keyAt(0) : null;
-        rebuildOnResume = true;
+        if (stopped) {
+            rebuildOnResume = true;
+        } else {
+            // Still on screen (the quick panel was over it, or Home was already in front): the tiles are current,
+            // so only go back to the first one; rebuilding would replay the entrance animation for nothing.
+            grid.post(() -> focusTile(0));
+        }
     }
 
     @Override
     protected void onStart() {
         super.onStart();
+        stopped = false;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(packageReceiver, packageFilter, Context.RECEIVER_NOT_EXPORTED);
             registerReceiver(timeReceiver, timeFilter, Context.RECEIVER_NOT_EXPORTED);
@@ -561,6 +570,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
         unregisterReceiver(packageReceiver);
         unregisterReceiver(timeReceiver);
         handler.removeCallbacks(clockCheck);
+        stopped = true;
         rebuildOnResume = true;
     }
 
