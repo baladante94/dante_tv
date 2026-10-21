@@ -419,6 +419,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
     protected void onStart() {
         super.onStart();
         stopped = false;
+        if (grid.getAdapter() == null) grid.setAdapter(adapter);   // dropped by onTrimMemory
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(packageReceiver, packageFilter, Context.RECEIVER_NOT_EXPORTED);
             registerReceiver(timeReceiver, timeFilter, Context.RECEIVER_NOT_EXPORTED);
@@ -557,16 +558,29 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
         if (openPopup != null) openPopup.dismiss();
     }
 
-    /** A game or film needing memory while Home is hidden gets the Top Shelf pictures back; Home redraws on return. */
+    /**
+     * A game or film needs the memory while Home is in the background: let go of the Top Shelf pictures and every
+     * tile's artwork, and rebuild them when Home comes back. Not at UI_HIDDEN, the ordinary trip to an app, where
+     * keeping them is what makes the return instant.
+     */
     @Override
     public void onTrimMemory(int level) {
         super.onTrimMemory(level);
-        boolean pressure = level == TRIM_MEMORY_RUNNING_LOW || level == TRIM_MEMORY_RUNNING_CRITICAL
-                || level >= TRIM_MEMORY_BACKGROUND;
-        if (pressure && shelf != null && !hasWindowFocus()) {
+        // RUNNING_LOW and CRITICAL also arrive while Home is visible (the accessibility services keep the process in
+        // the foreground); never blank the screen the owner is looking at.
+        boolean due = level >= TRIM_MEMORY_BACKGROUND
+                || level == TRIM_MEMORY_RUNNING_LOW || level == TRIM_MEMORY_RUNNING_CRITICAL;
+        if (!due || !stopped) return;
+        if (shelf != null) {
             shelf.release();
             shelfReleased = true;
         }
+        adapter.clear();
+        // With Home stopped no layout pass runs, so the tile views (and their bitmaps) would stay attached until
+        // Home comes back; setAdapter(null) recycles them now.
+        grid.setAdapter(null);
+        grid.getRecycledViewPool().clear();
+        rebuildOnResume = true;
     }
 
     @Override

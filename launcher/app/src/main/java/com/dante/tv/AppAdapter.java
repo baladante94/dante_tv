@@ -387,6 +387,12 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         return width <= 0 || height <= 0 || width >= height * 1.4f;
     }
 
+    /** Lets go of every tile and its artwork (Home is in the background and memory is short). */
+    void clear() {
+        items.clear();
+        notifyDataSetChanged();
+    }
+
     @NonNull
     @Override
     public Holder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
