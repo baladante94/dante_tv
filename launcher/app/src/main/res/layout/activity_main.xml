@@ -44,6 +44,7 @@
         <!-- Clock block, top right like tvOS. The texts use gravity right, not end: the launcher lays out
              left to right (no supportsRtl). -->
         <LinearLayout
+            android:id="@+id/clockBlock"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_gravity="right"
