@@ -66,40 +66,86 @@ Tudum data and needs no key. The key is stored only in the app's private storage
 
 ## Install
 
-**From a release:** download `dante-tv-<version>.apk` from
-[Releases](https://github.com/baladante94/dante_tv/releases), turn on debugging on the TV (below), then:
+### 1. Turn on debugging on the TV
+
+Settings → System → About → press OK on **Build** seven times. Then go to Developer options and turn on
+**Wireless debugging** (Google TV) or USB/Network debugging (Android TV). Keep the TV on.
+
+### 2. Get adb on your computer
+
+**macOS**
 
 ```bash
+brew install android-platform-tools
+```
+
+**Windows** (PowerShell)
+
+```powershell
+winget install Google.PlatformTools
+```
+
+Then open a new PowerShell window so `adb` is on the PATH. Without winget, download
+[SDK Platform-Tools](https://developer.android.com/tools/releases/platform-tools), unzip it and run `.\adb.exe`
+from that folder.
+
+### 3. Connect to the TV
+
+On Google TV, Wireless debugging shows a pairing code and two ports (Pair device with pairing code). The
+commands are the same on macOS and Windows:
+
+```bash
+adb pair <tv ip>:<pairing port>          # once, enter the code shown on the TV
 adb connect <tv ip>:<port>
-adb install dante-tv-1.0.0.apk
+```
+
+The port changes every time the TV restarts; `adb mdns services` lists the current one. On an Android
+TV with network debugging, it is just `adb connect <tv ip>`.
+
+### 4. Install Dante TV
+
+**From a release:** download `dante-tv-<version>.apk` from
+[Releases](https://github.com/baladante94/dante_tv/releases), then (macOS or Windows):
+
+```bash
+adb install -r dante-tv-1.1.0.apk
 adb shell pm grant com.dante.tv android.permission.WRITE_SECURE_SETTINGS
 adb shell cmd package set-home-activity --user 0 com.dante.tv/.MainActivity
 ```
 
-Press Home on the remote. Dante TV turns its accessibility services on by itself.
+Press Home on the remote. The `pm grant` line lets Home turn its accessibility services on by itself, now
+and whenever the TV switches them off; `set-home-activity` makes Dante TV the home screen.
 
-**From source:** you need JDK 17 and the Android SDK (platform 34). On macOS:
+**From source:** you need JDK 17 and the Android SDK (platform 34).
+
+macOS:
 
 ```bash
 brew install openjdk@17 android-commandlinetools
 sdkmanager "platforms;android-34" "build-tools;34.0.0"
+cd launcher && ./gradlew assembleRelease
+adb install -r app/build/outputs/apk/release/app-release.apk
 ```
 
-**On the TV:** Settings → System → About → press OK on **Build** seven times. Then go to Developer
-options and turn on **Wireless debugging** (Google TV) or USB/Network debugging (Android TV).
+Windows (PowerShell). The easiest route is Android Studio, which brings its own JDK and the SDK;
+open it once and let it finish setting up, then install Android 14 (API 34) under More Actions → SDK Manager:
 
-```bash
-adb pair <tv ip>:<pairing port>                 # Google TV wireless debugging, once
-adb connect <tv ip>:<port>
-TV_HOST=<tv ip> INPUT_KEY_SERVICE=1 launcher/build-and-install.sh
+```powershell
+winget install Google.AndroidStudio
+cd launcher
+$env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"
+.\gradlew.bat assembleRelease
+adb install -r app\build\outputs\apk\release\app-release.apk
 ```
 
-Then grant the one permission that lets Home turn its accessibility services on, now and whenever
-the TV switches them off. Press Home once afterwards:
+Then run the `pm grant` and `set-home-activity` lines from above. Builds are signed with the debug key
+unless `launcher/keystore.properties` points at a release key.
 
-```bash
-adb shell pm grant com.dante.tv android.permission.WRITE_SECURE_SETTINGS
-```
+On an Android TV with plain network ADB (port 5555), the scripts do the whole install, including switching
+Home and enabling the remote-key service: `TV_HOST=<tv ip> INPUT_KEY_SERVICE=1 launcher/build-and-install.sh`
+on macOS or Linux, `launcher\build-and-install.ps1 -TvHost <tv ip> -InputKeyService` on Windows.
+
+Dante TV runs two accessibility services, which switch themselves on once `pm grant` is done:
 
 | Service | What it does |
 |---|---|
@@ -110,7 +156,7 @@ The app targets SDK 28, which lets it join Wi-Fi networks and connect Bluetooth 
 
 **Configure** dock apps, hidden apps, the Live TV package and the column count in
 [`config.xml`](launcher/app/src/main/res/values/config.xml), or push a theme without rebuilding
-using `tools/theme.sh themes/aurora`.
+using `tools/theme.sh themes/aurora` (`tools\theme.ps1 -TvHost <tv ip> themes\aurora` on Windows).
 
 ## Debloating
 
@@ -123,6 +169,16 @@ export TV_HOST=<tv ip>
 tools/venv/bin/python -I tools/tv.py --probe                 # model, Android version, firmware
 tools/disable.sh examples/<your tv>/debloat.txt              # disable a list of packages
 tools/restore.sh examples/<your tv>/debloat.txt              # undo it
+```
+
+On Windows (PowerShell), with Python 3 from [python.org](https://www.python.org/downloads/) or
+`winget install Python.Python.3.12`:
+
+```powershell
+python -m venv tools\venv; tools\venv\Scripts\python.exe -m pip install -r tools\requirements.txt
+tools\venv\Scripts\python.exe -I tools\tv.py --probe
+powershell -ExecutionPolicy Bypass -File tools\disable.ps1 -TvHost <tv ip> examples\<your tv>\debloat.txt
+powershell -ExecutionPolicy Bypass -File tools\restore.ps1 -TvHost <tv ip> examples\<your tv>\debloat.txt
 ```
 
 [`examples/`](examples/) has tested lists for 66 TV models. Packages are disabled with
