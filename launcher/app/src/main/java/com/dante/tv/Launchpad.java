@@ -174,6 +174,12 @@ final class Launchpad {
         ImageView icon = v.findViewById(R.id.icon);
         View halo = v.findViewById(R.id.halo);
         TextView label = v.findViewById(R.id.label);
+        if (e.icon == null) {
+            try {
+                e.icon = activity.getPackageManager().getActivityIcon(e.component);
+            } catch (Exception ignored) {
+            }
+        }
         icon.setImageDrawable(e.icon != null ? e.icon : e.banner);
         // Launchpad's rounded squares, whatever shape the app's own icon has.
         icon.setOutlineProvider(new android.view.ViewOutlineProvider() {

@@ -68,7 +68,8 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         final ComponentName component;
         final String pkg;
         final Drawable banner;
-        final Drawable icon;
+        /** Null for a tile with a banner until the Launchpad first needs it (Home only draws the banner). */
+        Drawable icon;
         /** Text under the tile when it is focused in the grid: the label, plus the caption for a card. */
         final String name;
         /** Ambient glow colour; 0 until sampled from the banner, or the card's accent from the start. */
@@ -210,7 +211,8 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
             if (card != null && !card.component.equals(component)) continue;   // the card stands in for this tile
             if (card != null) {
                 if (!seen.add(pkg + '\n' + card.label)) continue;
-                fresh.add(new Entry(Entry.CARD, card.label, component, loadBanner(pm, ri), ri.loadIcon(pm),
+                Drawable cardBanner = loadBanner(pm, ri);
+                fresh.add(new Entry(Entry.CARD, card.label, component, cardBanner, cardBanner == null ? ri.loadIcon(pm) : null,
                         card.caption, card.accent));
                 continue;
             }
@@ -219,8 +221,11 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
             if (cached == null) {
                 // Same cleaner as the card prompt: an app label with a bidi override or line separator must not
                 // redraw the tile name as something else (#117).
+                // The icon is only drawn (and sampled for the glow) when there is no banner, so a tile with a banner
+                // skips loading and decoding it; the Launchpad loads it when it first shows the app.
+                Drawable banner = loadBanner(pm, ri);
                 cached = new Entry(Cards.cleanLabel(String.valueOf(ri.loadLabel(pm)), pkg), component,
-                        loadBanner(pm, ri), ri.loadIcon(pm));
+                        banner, banner == null ? ri.loadIcon(pm) : null);
                 built.put(key, cached);
             }
             if (!seen.add(pkg + '\n' + cached.label)) continue;
