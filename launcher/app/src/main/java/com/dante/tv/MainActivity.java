@@ -363,7 +363,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
             opts.inJustDecodeBounds = true;
             android.graphics.BitmapFactory.decodeFile(file.getPath(), opts);
             int w = opts.outWidth, h = opts.outHeight;
-            if (!WallpaperSize.accepted(w, h)) return;
+            if (!WallpaperSize.accepted(w, h)) return false;
             int sample = WallpaperSize.sampleSize(w, h, dm.widthPixels, dm.heightPixels);
             opts.inJustDecodeBounds = false;
             opts.inSampleSize = sample;
