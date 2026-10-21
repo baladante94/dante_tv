@@ -679,12 +679,38 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
         View panel = getLayoutInflater().inflate(R.layout.popup_inputs, root, false);
         LinearLayout rows = panel.findViewById(R.id.rows);
         PopupWindow popup = glassPopup(panel, (int) (220 * density));
+        // A dock tile can be swapped for any app in one go, without carrying tiles across the grid.
+        if (position < COLUMNS) addSettingsMenuRow(rows, popup, R.string.dock_replace, () -> replaceDockApp(key));
         addSettingsMenuRow(rows, popup, R.string.move_app, () -> startMove(key));
         addSettingsMenuRow(rows, popup, R.string.app_info, () -> adapter.openAppInfo(pkg));
         // Above the tile: the dock sits at the bottom of the screen, so a menu below it would be cut off.
         panel.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
         popup.showAsDropDown(card, 0, -(card.getHeight() + panel.getMeasuredHeight() + (int) (12 * density)));
         rows.getChildAt(0).requestFocus();
+    }
+
+    /** Edit dock: pick an app in the Launchpad and it swaps places with this dock app, saved like a move. */
+    private void replaceDockApp(String dockKey) {
+        launchpad.pick(chosen -> {
+            if (chosen.key.equals(dockKey)) return;
+            // Without Jump back in the tiles on screen are exactly the saved order, as when moving one.
+            adapter.setReordering(true, null);
+            reloadTiles();
+            grid.post(() -> {
+                int a = adapter.positionOf(dockKey), b = adapter.positionOf(chosen.key);
+                if (a >= 0 && b >= 0) {
+                    adapter.move(b, a);
+                    adapter.move(b > a ? a + 1 : a - 1, b);
+                    adapter.saveOrder();
+                }
+                adapter.setReordering(false, null);
+                lastFocused = Math.max(0, a);
+                lastFocusedKey = chosen.key;
+                reloadTiles();
+                restoreFocus();
+                Toast.makeText(this, getString(R.string.dock_replaced, chosen.label), Toast.LENGTH_SHORT).show();
+            });
+        });
     }
 
     private void startMove(String key) {

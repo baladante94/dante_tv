@@ -116,6 +116,9 @@
     <string name="app_info">App info</string>
     <string name="moving_app">Moving %1$s: arrows move it, OK puts it down</string>
     <string name="order_saved">App order saved</string>
+    <string name="dock_replace">Replace</string>
+    <string name="dock_pick">Choose an app for the dock</string>
+    <string name="dock_replaced">%1$s is in the dock</string>
     <string name="reset_order">Reset app order</string>
     <string name="order_reset">App order reset</string>
     <string name="shelf_setup">Top Shelf setup</string>

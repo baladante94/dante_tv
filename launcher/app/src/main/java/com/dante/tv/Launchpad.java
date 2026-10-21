@@ -38,6 +38,8 @@ final class Launchpad {
     /** The home screen views hidden under the overlay: it covers them, so drawing them every frame is waste. */
     private final List<View> covered = new ArrayList<>();
     private int page;
+    /** Set while choosing an app for the dock: OK hands the app back instead of opening it. */
+    private java.util.function.Consumer<AppAdapter.Entry> picker;
 
     Launchpad(Activity activity, FrameLayout root, AppAdapter adapter, boolean animations) {
         this.activity = activity;
@@ -49,6 +51,13 @@ final class Launchpad {
 
     boolean isOpen() {
         return overlay != null;
+    }
+
+    /** Opens in pick mode: OK on an app hands it to {@code onPick} and closes, Back closes without a choice. */
+    void pick(java.util.function.Consumer<AppAdapter.Entry> onPick) {
+        if (overlay != null) return;
+        picker = onPick;
+        open();
     }
 
     /** Opens over the home screen; the views in {@code leaveOut} (the menu) are kept out of the blurred backdrop. */
@@ -74,7 +83,7 @@ final class Launchpad {
         overlay.addView(tint, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         TextView title = new TextView(activity);
-        title.setText(R.string.nav_apps);
+        title.setText(picker != null ? R.string.dock_pick : R.string.nav_apps);
         title.setTextColor(0xE6FFFFFF);
         title.setTextSize(22);
         title.setTypeface(activity.getResources().getFont(R.font.outfit_medium));
@@ -156,6 +165,7 @@ final class Launchpad {
 
     void close(boolean animate) {
         if (overlay == null) return;
+        picker = null;
         final FrameLayout gone = overlay;
         overlay = null;
         cells.clear();
@@ -191,8 +201,10 @@ final class Launchpad {
         icon.setClipToOutline(true);
         label.setText(e.label);
         v.setOnClickListener(x -> {
+            java.util.function.Consumer<AppAdapter.Entry> chosen = picker;
             close(false);
-            adapter.launch(e);
+            if (chosen != null) chosen.accept(e);
+            else adapter.launch(e);
         });
         v.setOnLongClickListener(x -> {
             adapter.openAppInfo(e.pkg);
