@@ -271,6 +271,7 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         rowLabels.clear();
         List<Entry> sections = new ArrayList<>();
         addSection(sections, at, ctx.getString(R.string.section_recent), recent);
+        builtRecents = recentsNow();
         if (!rowLabels.isEmpty()) rowLabels.put(at + sections.size(), ctx.getString(R.string.section_all));
         fresh.addAll(at, sections);
         // Retain the optional Default-home tile until dependent tile-ordering work is merged.
@@ -346,6 +347,23 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
 
 
     /** Records an app as opened, for Jump back in (also used by the Top Shelf cards). */
+    /** Jump back in as last built (package order), so a return to Home can tell whether the row changed. */
+    private String builtRecents = "";
+
+    /** The Jump back in order as recorded now: its packages, newest first, as many as the row shows. */
+    private String recentsNow() {
+        Map<String, ?> opened = ctx.getSharedPreferences(RECENTS, Context.MODE_PRIVATE).getAll();
+        List<String> pkgs = new ArrayList<>();
+        for (Map.Entry<String, ?> e : opened.entrySet()) if (e.getValue() instanceof Long) pkgs.add(e.getKey());
+        Collections.sort(pkgs, (a, b) -> Long.compare((Long) opened.get(b), (Long) opened.get(a)));
+        return String.join("\n", pkgs.subList(0, Math.min(dockSize, pkgs.size())));
+    }
+
+    /** True when an app opened since the last build changed the Jump back in row (re-opening the first one does not). */
+    boolean recentsChanged() {
+        return !recentsNow().equals(builtRecents);
+    }
+
     static void opened(Context ctx, String pkg) {
         ctx.getSharedPreferences(RECENTS, Context.MODE_PRIVATE).edit().putLong(pkg, System.currentTimeMillis()).apply();
     }

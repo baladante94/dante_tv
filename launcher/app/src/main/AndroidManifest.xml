@@ -9,6 +9,8 @@
 
     <!-- Trending rows: Netflix's Top 10 file and TMDB, fetched in the background a few times a day. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- HomeGuard: after a TV update, check at boot that Dante TV is still the home screen. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <!-- Joining a network from the menu's Wi-Fi panel (WifiManager.addNetwork/enableNetwork, see build.gradle targetSdk). -->
@@ -114,6 +116,13 @@
             android:name=".ShelfSetupActivity"
             android:exported="false"
             android:theme="@style/Theme.TvHome" />
+        <receiver
+            android:name=".HomeGuard"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
         <receiver
             android:name=".SleepReceiver"
             android:exported="false" />

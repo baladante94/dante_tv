@@ -165,7 +165,9 @@ final class SidePanel {
         addRow(R.drawable.ic_bluetooth, ctx.getString(R.string.bluetooth), bluetoothSummary(), v -> showBluetooth());
         addRow(R.drawable.ic_input, ctx.getString(R.string.inputs), null, v -> showInputs());
         addRow(R.drawable.ic_picture, ctx.getString(R.string.side_picture), null, v -> go(new Intent(Settings.ACTION_DISPLAY_SETTINGS)));
-        if (hasMemc()) addRow(R.drawable.ic_picture, "MEMC", memcSet(), v -> showMemc(0));
+        // The TV's live value would need its Picture screens opened; this is the choice Dante TV keeps applied.
+        if (hasMemc()) addRow(R.drawable.ic_picture, "MEMC", memcSet() == null ? null : ctx.getString(R.string.memc_kept, memcSet()),
+                v -> showMemc(0));
         // The TV's own Sound screen; the general sound link opens Display & Sound at picture and scaling.
         addRow(R.drawable.ic_sound, ctx.getString(R.string.side_sound), null, v -> {
             Intent sound = new Intent("com.android.tv.action.VIEW_SOUND_SETTINGS");
@@ -272,6 +274,12 @@ final class SidePanel {
             addRow(R.drawable.ic_picture, v, v.equals(set) ? "\u2713" : null,
                     x -> applyMemc(v));
         }
+        TextView note = new TextView(ctx);
+        note.setText(R.string.memc_note);
+        note.setTextColor(0x99FFFFFF);
+        note.setTextSize(12);
+        note.setPadding((int) (16 * density), (int) (10 * density), (int) (16 * density), 0);
+        rows.addView(note);
         focusRow(focus);
     }
 

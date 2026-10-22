@@ -49,6 +49,15 @@ final class Launchpad {
         this.animations = animations;
     }
 
+    private View wallView;
+    private Bitmap wallSmall;
+
+    /** Home's wallpaper is a GPU bitmap, which a software Canvas cannot draw: the snapshot paints this copy instead. */
+    void setWallpaper(View view, Bitmap small) {
+        wallView = view;
+        wallSmall = small;
+    }
+
     boolean isOpen() {
         return overlay != null;
     }
@@ -282,8 +291,17 @@ final class Launchpad {
         int sw = Math.max(1, root.getWidth() / 8), sh = Math.max(1, root.getHeight() / 8);
         Bitmap bmp = Bitmap.createBitmap(sw, sh, Bitmap.Config.ARGB_8888);
         Canvas c = new Canvas(bmp);
+        if (wallView != null && wallSmall != null) {
+            // The wallpaper fills the screen (centre crop), so its small copy stretched over the snapshot matches.
+            c.drawBitmap(wallSmall, null, new android.graphics.Rect(0, 0, sw, sh), null);
+            wallView.setVisibility(View.INVISIBLE);
+        }
         c.scale(sw / (float) root.getWidth(), sh / (float) root.getHeight());
-        root.draw(c);
+        try {
+            root.draw(c);
+        } finally {
+            if (wallView != null) wallView.setVisibility(View.VISIBLE);
+        }
         int[] px = new int[sw * sh];
         bmp.getPixels(px, 0, sw, 0, 0, sw, sh);
         for (int pass = 0; pass < 3; pass++) {

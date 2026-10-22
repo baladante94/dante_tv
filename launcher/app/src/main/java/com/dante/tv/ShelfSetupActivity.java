@@ -52,6 +52,7 @@ public class ShelfSetupActivity extends Activity {
         remove.setOnClickListener(v -> {
             ShelfKey.clear(this);
             Trending.reset(this);
+            LauncherSettingsActivity.version++;
             setResult(RESULT_OK);
             showState();
         });
@@ -147,6 +148,7 @@ public class ShelfSetupActivity extends Activity {
         if (ok) {
             ShelfKey.save(this, token);
             Trending.reset(this);
+            LauncherSettingsActivity.version++;
             setResult(RESULT_OK);
             reply(s, "200 OK", page("Saved", "Your TV has the key. Press Done on the TV and the Top Shelf will fill in a minute."));
         } else {

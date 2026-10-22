@@ -67,6 +67,60 @@ public class OptimizeService extends AccessibilityService {
         return instance != null && instance.performGlobalAction(GLOBAL_ACTION_LOCK_SCREEN);
     }
 
+    // ---- JioHotstar profile picker -----------------------------------------------------------------
+
+    private static final String HOTSTAR = "in.startv.hotstar";
+    private Intent hotstarLink;
+    private long hotstarStart;
+    private boolean hotstarPicker;
+
+    /**
+     * JioHotstar opened from closed asks "Who's watching?" first and drops the link it was opened with. Watch for
+     * that screen for up to a minute after a Top Shelf card opened it, and send the link again once a profile is
+     * picked. When Hotstar was already open there is no picker and nothing more happens.
+     */
+    static void resendAfterHotstarProfile(Intent link) {
+        if (instance == null) return;
+        instance.hotstarLink = link;
+        instance.hotstarStart = System.currentTimeMillis();
+        instance.hotstarPicker = false;
+        instance.handler.removeCallbacks(instance.hotstarCheck);
+        instance.handler.postDelayed(instance.hotstarCheck, 1000);
+    }
+
+    private final Runnable hotstarCheck = new Runnable() {
+        @Override
+        public void run() {
+            if (hotstarLink == null) return;
+            long waited = System.currentTimeMillis() - hotstarStart;
+            AccessibilityNodeInfo root = getRootInActiveWindow();
+            boolean inHotstar = root != null && HOTSTAR.contentEquals(root.getPackageName() == null ? "" : root.getPackageName());
+            boolean picker = inHotstar && !root.findAccessibilityNodeInfosByViewId(HOTSTAR + ":id/tv_who_is_watching").isEmpty();
+            if (picker) {
+                hotstarPicker = true;
+            } else if (hotstarPicker && inHotstar) {
+                // A profile was picked: Hotstar is on its home now, send it to the title.
+                Intent link = hotstarLink;
+                hotstarLink = null;
+                handler.postDelayed(() -> {
+                    try {
+                        startActivity(link);
+                    } catch (Exception ignored) {
+                    }
+                }, 1200);
+                return;
+            } else if (!hotstarPicker && waited > 8000) {
+                hotstarLink = null;   // no picker: Hotstar was open and took the link the first time
+                return;
+            }
+            if (waited > 60_000 || (!inHotstar && waited > 8000)) {
+                hotstarLink = null;
+                return;
+            }
+            handler.postDelayed(this, 400);
+        }
+    };
+
     // ---- MEMC ------------------------------------------------------------------------------------
 
     /** The MEMC Effect values on MediaTek TVs, in the order the TV's picker steps through them. */
@@ -229,6 +283,34 @@ public class OptimizeService extends AccessibilityService {
     @Override
     protected void onServiceConnected() {
         instance = this;
+        // After a start-up (a power cut included) the TV may have dropped the MEMC chosen in the side panel.
+        handler.postDelayed(this::memcAtBoot, 25_000);
+    }
+
+    /**
+     * Once per boot: put back the MEMC chosen in the side panel, behind the cover. The TV keeps picture settings only
+     * across a clean standby, so a power cut sends MEMC back to the picture mode's default. Nothing is playing yet,
+     * so the Picture screens run hidden for a few seconds.
+     */
+    private void memcAtBoot() {
+        android.content.SharedPreferences prefs = getSharedPreferences("side_panel", MODE_PRIVATE);
+        String wanted = prefs.getString("memc", null);
+        int boot = Settings.Global.getInt(getContentResolver(), Settings.Global.BOOT_COUNT, -1);
+        if (wanted == null || boot < 0 || prefs.getInt("memc_boot", -2) == boot) return;
+        try {
+            getPackageManager().getPackageInfo(PQ, 0);
+        } catch (Exception e) {
+            return;
+        }
+        if (pkgs != null || memcTarget != null) {
+            handler.postDelayed(this::memcAtBoot, 10_000);
+            return;
+        }
+        prefs.edit().putInt("memc_boot", boot).apply();   // once, even if it fails
+        showCover();
+        ((TextView) cover.findViewById(R.id.coverTitle)).setText(R.string.memc_boot_title);
+        progress.setText(getString(R.string.memc_boot_progress, wanted));
+        startMemc(wanted, ok -> handler.postDelayed(this::removeCover, 300));
     }
 
     @Override

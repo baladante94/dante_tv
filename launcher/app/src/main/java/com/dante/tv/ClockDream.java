@@ -1,7 +1,6 @@
 package com.dante.tv;
 
 import android.animation.ArgbEvaluator;
-import android.animation.ValueAnimator;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Handler;
 import android.os.Looper;
@@ -81,12 +80,14 @@ public class ClockDream extends DreamService {
     @Override
     public void onDreamingStopped() {
         handler.removeCallbacks(tick);
+        cancelGlowSteps();
         super.onDreamingStopped();
     }
 
     @Override
     public void onDetachedFromWindow() {
         handler.removeCallbacks(tick);
+        cancelGlowSteps();
         super.onDetachedFromWindow();
     }
 
@@ -112,13 +113,30 @@ public class ClockDream extends DreamService {
         }
     }
 
+    /** Glow colour steps still queued; dropped when the screensaver stops. */
+    private final java.util.List<Runnable> glowSteps = new java.util.ArrayList<>();
+
+    /**
+     * The glow is a full-screen gradient: changing it every frame for 8 s drew about 280 frames a minute. 16 steps
+     * over the same 8 s (one every 500 ms) look the same on that dark, wide gradient and draw a fraction of them.
+     */
     private void shiftGlow() {
+        cancelGlowSteps();
         int from = glowColor;
         colorIndex = (colorIndex + 1) % PALETTE.length;
-        ValueAnimator anim = ValueAnimator.ofObject(new ArgbEvaluator(), from, PALETTE[colorIndex]);
-        anim.setDuration(8000);
-        anim.addUpdateListener(a -> setGlow((int) a.getAnimatedValue()));
-        anim.start();
+        int to = PALETTE[colorIndex];
+        ArgbEvaluator mix = new ArgbEvaluator();
+        for (int i = 1; i <= 16; i++) {
+            float f = i / 16f;
+            Runnable step = () -> setGlow((int) mix.evaluate(f, from, to));
+            glowSteps.add(step);
+            handler.postDelayed(step, i * 500L);
+        }
+    }
+
+    private void cancelGlowSteps() {
+        for (Runnable r : glowSteps) handler.removeCallbacks(r);
+        glowSteps.clear();
     }
 
     private void setGlow(int color) {

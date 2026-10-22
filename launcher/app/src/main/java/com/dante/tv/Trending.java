@@ -32,9 +32,17 @@ final class Trending {
         final File backdrop, poster;
         /** A series (Shows tab) rather than a film (Movies tab). */
         final boolean series;
+        /** The title's own ID in its app, when Wikidata knows it ("" otherwise), and the shelf's country. */
+        final String netflixId, appleId, crunchyrollId, hotstarUrl, region;
 
-        Item(String section, String title, String pkg, String meta, File backdrop, File poster, boolean series) {
+        Item(String section, String title, String pkg, String meta, File backdrop, File poster, boolean series,
+             String netflixId, String appleId, String crunchyrollId, String hotstarUrl, String region) {
             this.series = series;
+            this.hotstarUrl = hotstarUrl;
+            this.netflixId = netflixId;
+            this.crunchyrollId = crunchyrollId;
+            this.appleId = appleId;
+            this.region = region;
             this.section = section;
             this.title = title;
             this.pkg = pkg;
@@ -45,7 +53,7 @@ final class Trending {
     }
 
     private static final String NETFLIX = "com.netflix.ninja", APPLE = "com.apple.atve.androidtv.appletv",
-            CRUNCHYROLL = "com.crunchyroll.crunchyroid";
+            CRUNCHYROLL = "com.crunchyroll.crunchyroid", HOTSTAR = "in.startv.hotstar";
     /** Shows and films kept per service, so the Movies and Shows tabs have enough of each. */
     private static final int PER_KIND = 6;
     private static final long TMDB_EVERY_MS = 12 * 60 * 60_000L, NETFLIX_EVERY_MS = 3 * 24 * 60 * 60_000L;
@@ -67,14 +75,16 @@ final class Trending {
         try {
             JSONObject root = new JSONObject(new String(Files.readAllBytes(new File(dir(ctx), "trending.json").toPath()),
                     StandardCharsets.UTF_8));
-            for (String key : new String[]{"netflix", "apple", "crunchyroll"}) {
+            String region = root.optString("region", "");
+            for (String key : new String[]{"netflix", "apple", "crunchyroll", "hotstar"}) {
                 JSONArray arr = root.optJSONArray(key);
                 for (int i = 0; arr != null && i < arr.length(); i++) {
                     JSONObject o = arr.getJSONObject(i);
                     File backdrop = new File(o.getString("image")), poster = new File(o.optString("poster", ""));
                     if (backdrop.isFile() && poster.isFile() && installed(ctx, o.getString("pkg"))) {
                         out.add(new Item(o.getString("section"), o.getString("title"), o.getString("pkg"),
-                                o.optString("meta", ""), backdrop, poster, o.optBoolean("series")));
+                                o.optString("meta", ""), backdrop, poster, o.optBoolean("series"),
+                                o.optString("nf", ""), o.optString("atv", ""), o.optString("cr", ""), o.optString("hs", ""), region));
                     }
                 }
             }
@@ -111,8 +121,9 @@ final class Trending {
         long now = System.currentTimeMillis();
         boolean changed = false;
         // An older cache (no posters or film/series split) or another country starts over.
-        if (root.optInt("v") != 3 || !region.equals(root.optString("region"))) {
-            root = new JSONObject().put("v", 3).put("region", region);
+        // v5: JioHotstar, and each title's TMDB and app IDs (for opening the title in its app).
+        if (root.optInt("v") != 6 || !region.equals(root.optString("region"))) {
+            root = new JSONObject().put("v", 6).put("region", region);
         }
         loadGenres(token);
         if (now - root.optLong("netflixAt") > NETFLIX_EVERY_MS && installed(ctx, NETFLIX)) {
@@ -125,7 +136,14 @@ final class Trending {
         if (now - root.optLong("tmdbAt") > TMDB_EVERY_MS) {
             if (installed(ctx, APPLE)) root.put("apple", popular(ctx, token, region, 350, "Popular on Apple TV", APPLE));
             if (installed(ctx, CRUNCHYROLL)) root.put("crunchyroll", popular(ctx, token, region, 283, "Popular on Crunchyroll", CRUNCHYROLL));
+            if (installed(ctx, HOTSTAR)) root.put("hotstar", popular(ctx, token, region, 2336, "Popular on JioHotstar", HOTSTAR));
             root.put("tmdbAt", now);
+            changed = true;
+        }
+        // App IDs come from Wikidata, which rate-limits at times: a failed lookup is tried again after half an hour
+        // instead of waiting for the next 12-hour refresh (until then those cards open the app).
+        if (changed || (!root.optBoolean("idsOk", false) && now - root.optLong("idsAt") > IDS_RETRY_MS)) {
+            root.put("idsOk", appIds(root)).put("idsAt", now);
             changed = true;
         }
         if (changed) {
@@ -227,7 +245,7 @@ final class Trending {
         meta.append(" \u00B7 ").append(section.replace("Top 10 on ", "").replace("Popular on ", ""));
         double rating = t.optDouble("vote_average", 0);
         if (rating > 0) meta.append(String.format(java.util.Locale.ROOT, " \u00B7 \u2605 %.1f", rating));
-        out.put(new JSONObject().put("section", section).put("title", name).put("pkg", pkg)
+        out.put(new JSONObject().put("section", section).put("title", name).put("pkg", pkg).put("id", t.optInt("id"))
                 .put("meta", meta.toString()).put("image", backdrop.getPath()).put("poster", poster.getPath())
                 .put("series", tv));
         return true;
@@ -253,6 +271,147 @@ final class Trending {
         if (files == null) return;
         for (File f : files) {
             if (f.getName().endsWith(".jpg") && !json.contains(f.getName())) f.delete();
+        }
+    }
+
+    private static final long IDS_RETRY_MS = 30 * 60_000L;
+    private static final String[] ROWS = {"netflix", "apple", "crunchyroll", "hotstar"};
+
+    /**
+     * Each card's title in its own app, so a card opens the title rather than the app. TMDB has no such IDs.
+     * JustWatch (which feeds TMDB's "where to watch") has each title's link on every service, new releases
+     * included: one batched request for all cards gives the Netflix ID, the Apple TV show or film ID and the
+     * JioHotstar page. Its Crunchyroll links point at episodes, which the app ignores, so Crunchyroll series IDs
+     * come from Wikidata (P11330), which also fills any Netflix or Apple TV ID JustWatch missed.
+     * @return false when a lookup failed (rate limit, network), so refresh() tries again later.
+     */
+    private static boolean appIds(JSONObject root) {
+        List<JSONObject> items = new ArrayList<>();
+        try {
+            for (String key : ROWS) {
+                JSONArray arr = root.optJSONArray(key);
+                for (int i = 0; arr != null && i < arr.length(); i++) {
+                    JSONObject o = arr.getJSONObject(i);
+                    if (o.optInt("id") != 0 && !o.optBoolean("looked")) items.add(o);
+                }
+            }
+        } catch (Exception e) {
+            return false;
+        }
+        if (items.isEmpty()) return true;
+        boolean ok = justWatch(items) & wikidata(items);
+        if (ok) {
+            for (JSONObject o : items) {
+                try {
+                    o.put("looked", true);
+                } catch (Exception ignored) {
+                }
+            }
+        }
+        return ok;
+    }
+
+    private static boolean justWatch(List<JSONObject> items) {
+        try {
+            StringBuilder q = new StringBuilder("query {");
+            for (int i = 0; i < items.size(); i++) {
+                q.append(" t").append(i).append(": popularTitles(country: IN, first: 3, filter: {searchQuery: ")
+                        .append(JSONObject.quote(items.get(i).getString("title")))
+                        .append("}) { edges { node { objectType content(country: IN, language: \"en\") { externalIds { tmdbId } }")
+                        .append(" offers(country: IN, platform: WEB) { standardWebURL package { clearName } } } } }");
+            }
+            q.append(" }");
+            HttpURLConnection c = open("https://apis.justwatch.com/graphql", null);
+            c.setRequestMethod("POST");
+            c.setDoOutput(true);
+            c.setRequestProperty("Content-Type", "application/json");
+            try (OutputStream out = c.getOutputStream()) {
+                out.write(new JSONObject().put("query", q.toString()).toString().getBytes(StandardCharsets.UTF_8));
+            }
+            JSONObject data;
+            try (InputStream in = c.getInputStream()) {
+                data = new JSONObject(new String(readAll(in), StandardCharsets.UTF_8)).getJSONObject("data");
+            } finally {
+                c.disconnect();
+            }
+            for (int i = 0; i < items.size(); i++) {
+                JSONObject o = items.get(i);
+                JSONObject hits = data.optJSONObject("t" + i);
+                JSONArray edges = hits == null ? null : hits.optJSONArray("edges");
+                for (int e = 0; edges != null && e < edges.length(); e++) {
+                    JSONObject node = edges.getJSONObject(e).getJSONObject("node");
+                    boolean series = "SHOW".equals(node.optString("objectType"));
+                    String tmdb = node.getJSONObject("content").getJSONObject("externalIds").optString("tmdbId");
+                    if (series != o.optBoolean("series") || !tmdb.equals(String.valueOf(o.optInt("id")))) continue;
+                    JSONArray offers = node.optJSONArray("offers");
+                    for (int f = 0; offers != null && f < offers.length(); f++) {
+                        JSONObject offer = offers.getJSONObject(f);
+                        String name = offer.getJSONObject("package").optString("clearName").toLowerCase(java.util.Locale.ROOT);
+                        String url = offer.optString("standardWebURL");
+                        if (name.contains("channel")) continue;   // the Amazon channel of a service, not the service's app
+                        java.util.regex.Matcher m;
+                        if (name.startsWith("netflix") && !o.has("nf")
+                                && (m = java.util.regex.Pattern.compile("netflix\\.com/title/(\\d+)").matcher(url)).find()) {
+                            o.put("nf", m.group(1));
+                        } else if (name.startsWith("apple tv") && !o.has("atv")) {
+                            // A show's link is to an episode and names the show in showId; a film's ends in its own ID.
+                            m = java.util.regex.Pattern.compile(series ? "showId=(umc\\.cmc\\.[a-z0-9]+)" : "/(umc\\.cmc\\.[a-z0-9]+)").matcher(url);
+                            if (m.find()) o.put("atv", m.group(1));
+                        } else if (name.contains("hotstar") && !o.has("hs") && url.contains("hotstar.com/")) {
+                            o.put("hs", url);
+                        }
+                    }
+                    break;
+                }
+            }
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private static boolean wikidata(List<JSONObject> items) {
+        try {
+            StringBuilder tv = new StringBuilder(), mv = new StringBuilder();
+            List<JSONObject> asked = new ArrayList<>();
+            for (JSONObject o : items) {
+                boolean need = "com.crunchyroll.crunchyroid".equals(o.optString("pkg")) && o.optBoolean("series") ? !o.has("cr")
+                        : "com.netflix.ninja".equals(o.optString("pkg")) ? !o.has("nf")
+                        : "com.apple.atve.androidtv.appletv".equals(o.optString("pkg")) && !o.has("atv");
+                if (!need) continue;
+                asked.add(o);
+                (o.optBoolean("series") ? tv : mv).append(" \"").append(o.optInt("id")).append('"');
+            }
+            if (asked.isEmpty()) return true;
+            String query = "SELECT ?tv ?mv ?nf ?atvs ?atvm ?cr WHERE {"
+                    + " { VALUES ?tv {" + tv + " } ?item wdt:P4983 ?tv. } UNION { VALUES ?mv {" + mv + " } ?item wdt:P4947 ?mv. }"
+                    + " OPTIONAL { ?item wdt:P1874 ?nf } OPTIONAL { ?item wdt:P9751 ?atvs } OPTIONAL { ?item wdt:P9586 ?atvm }"
+                    + " OPTIONAL { ?item wdt:P11330 ?cr } }";
+            HttpURLConnection c = open("https://query.wikidata.org/sparql?format=json&query="
+                    + URLEncoder.encode(query, "UTF-8"), null);
+            c.setRequestProperty("Accept", "application/sparql-results+json");
+            JSONArray rows;
+            try (InputStream in = c.getInputStream()) {
+                rows = new JSONObject(new String(readAll(in), StandardCharsets.UTF_8))
+                        .getJSONObject("results").getJSONArray("bindings");
+            } finally {
+                c.disconnect();
+            }
+            for (int r = 0; r < rows.length(); r++) {
+                JSONObject b = rows.getJSONObject(r);
+                boolean series = b.has("tv");
+                String id = b.getJSONObject(series ? "tv" : "mv").getString("value");
+                String atvKey = series ? "atvs" : "atvm";
+                for (JSONObject o : asked) {
+                    if (o.optBoolean("series") != series || !id.equals(String.valueOf(o.optInt("id")))) continue;
+                    if (b.has("nf") && !o.has("nf")) o.put("nf", b.getJSONObject("nf").getString("value"));
+                    if (b.has(atvKey) && !o.has("atv")) o.put("atv", b.getJSONObject(atvKey).getString("value"));
+                    if (b.has("cr") && !o.has("cr")) o.put("cr", b.getJSONObject("cr").getString("value"));
+                }
+            }
+            return true;
+        } catch (Exception e) {
+            return false;
         }
     }
 
@@ -285,7 +444,7 @@ final class Trending {
         HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
         c.setConnectTimeout(10_000);
         c.setReadTimeout(20_000);
-        c.setRequestProperty("User-Agent", "CleanYourTV");
+        c.setRequestProperty("User-Agent", "DanteTV/1.1 (github.com/baladante94/dante_tv)");
         if (token != null) c.setRequestProperty("Authorization", "Bearer " + token);
         return c;
     }

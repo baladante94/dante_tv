@@ -198,7 +198,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
             if (Intent.ACTION_PACKAGE_REMOVED.equals(intent.getAction())
                     && intent.getBooleanExtra(Intent.EXTRA_REPLACING, false)) return;
             AppAdapter.forget(intent.getData() != null ? intent.getData().getSchemeSpecificPart() : null);
-            reloadApps(false);
+            // In the background only mark the tiles stale: a run of app updates then costs one rebuild on return.
+            if (stopped) appsChanged = true;
+            else reloadApps(false);
         }
     };
     // Right after boot the clock is often wrong until network time arrives; don't wait a minute to catch up.
@@ -213,7 +215,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
         @Override
         public void run() {
             updateGreeting();
-            updateWifiLabel();
+            // No Wi-Fi refresh here: the label follows the network callbacks and is refreshed after each return
+            // to Home, so a minute's getConnectionInfo on the UI thread would be work for nothing.
             sky.update();
             if (shelf != null && System.currentTimeMillis() / 60_000L % (TopShelf.ROTATE_MS / 60_000L) == 0) shelf.rotate();
             handler.postDelayed(this, MINUTE_MS);
@@ -292,6 +295,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
         }
         grid.setAdapter(adapter(cfg));
         launchpad = new Launchpad(this, root, adapter, animations);
+        launchpad.setWallpaper(wallView, wallSmall);
         // A key from an older theme file moves into the launcher's own storage once.
         if (ShelfKey.token(this).isEmpty() && !cfg.tmdbToken.isEmpty()) ShelfKey.save(this, cfg.tmdbToken);
         tmdbToken = safeMode ? "" : ShelfKey.token(this);
@@ -303,6 +307,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
             grid.post(this::prefetchShelf);
         }
         if (safeMode) Toast.makeText(this, R.string.safe_mode, Toast.LENGTH_LONG).show();
+        if (getIntent() != null && getIntent().getBooleanExtra(HomeGuard.EXTRA_HOME_LOST, false)) explainHomeLost();
         // Running a few minutes without crashing ends safe mode for the next start.
         handler.postDelayed(() -> Watchdog.clear(this), Watchdog.STABLE_MS);
         if (getIntent() != null && getIntent().hasExtra(EXTRA_WIFI_JOIN)) {
@@ -332,6 +337,14 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
         packageFilter.addAction(Intent.ACTION_PACKAGE_REMOVED);
         packageFilter.addAction(Intent.ACTION_PACKAGE_CHANGED);
         packageFilter.addDataScheme("package");
+        // Registered for Home's whole life, so a return from an app knows whether apps changed meanwhile.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(packageReceiver, packageFilter, Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            registerReceiver(packageReceiver, packageFilter);
+        }
+        android.content.pm.ChangedPackages changed = getPackageManager().getChangedPackages(0);
+        packageSequence = changed != null ? changed.getSequenceNumber() : 0;
         timeFilter.addAction(Intent.ACTION_TIMEZONE_CHANGED);
 
         ConnectivityManager cm = getSystemService(ConnectivityManager.class);
@@ -356,6 +369,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
      * costs a screen-sized bitmap (about 4 MB at 1080p), which is the price of a wallpaper on a 1 GB TV.
      * A picture over 4K is refused rather than decoded (#166); the plain colour stays.
      */
+    /** The wallpaper view (a GPU bitmap) and a small software copy of it for the Launchpad's snapshot. */
+    private View wallView;
+    private android.graphics.Bitmap wallSmall;
+
     private boolean showWallpaper(File file) {
         try {
             android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
@@ -376,9 +393,19 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
             opts.inPreferredConfig = android.graphics.Bitmap.Config.RGB_565;   // no alpha needed, half the memory
             android.graphics.Bitmap bmp = android.graphics.BitmapFactory.decodeFile(file.getPath(), opts);
             if (bmp == null) return false;
+            // Software rendering cannot draw a GPU bitmap, so the Launchpad's blurred backdrop gets a 1/8 copy.
+            wallSmall = android.graphics.Bitmap.createScaledBitmap(bmp, Math.max(1, bmp.getWidth() / 8),
+                    Math.max(1, bmp.getHeight() / 8), true);
+            // One copy, in GPU memory: no software bitmap plus its texture, and no re-upload on every return.
+            android.graphics.Bitmap gpu = bmp.copy(android.graphics.Bitmap.Config.HARDWARE, false);
+            if (gpu != null) {
+                bmp.recycle();
+                bmp = gpu;
+            }
             android.widget.ImageView wall = new android.widget.ImageView(this);
             wall.setScaleType(android.widget.ImageView.ScaleType.CENTER_CROP);
             wall.setImageBitmap(bmp);
+            wallView = wall;
             root.addView(wall, 0, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
             return true;
         } catch (Exception | OutOfMemoryError e) {
@@ -395,6 +422,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
+        if (intent != null && intent.getBooleanExtra(HomeGuard.EXTRA_HOME_LOST, false)) explainHomeLost();
         if (intent != null && intent.hasExtra(EXTRA_WIFI_JOIN)) {
             String ssid = intent.getStringExtra(EXTRA_WIFI_JOIN);
             handler.postDelayed(() -> askWifiPassword(ssid), 300);
@@ -407,7 +435,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
         lastFocused = 0;
         lastFocusedKey = adapter.getItemCount() > 0 ? adapter.keyAt(0) : null;
         if (stopped) {
-            rebuildOnResume = true;
+            refocusOnResume = true;
         } else {
             // Still on screen (the quick panel was over it, or Home was already in front): the tiles are current,
             // so only go back to the first one; rebuilding would replay the entrance animation for nothing.
@@ -421,10 +449,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
         stopped = false;
         if (grid.getAdapter() == null) grid.setAdapter(adapter);   // dropped by onTrimMemory
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(packageReceiver, packageFilter, Context.RECEIVER_NOT_EXPORTED);
             registerReceiver(timeReceiver, timeFilter, Context.RECEIVER_NOT_EXPORTED);
         } else {
-            registerReceiver(packageReceiver, packageFilter);
             registerReceiver(timeReceiver, timeFilter);
         }
         updateClockVisibility();
@@ -433,12 +459,25 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
     @Override
     protected void onResume() {
         super.onResume();
+        // Launcher settings changed (apps per row, animations): rebuild Home with them, even when that screen was left
+        // with the Home key, which skips onActivityResult.
+        if (settingsVersion != LauncherSettingsActivity.version) {
+            settingsVersion = LauncherSettingsActivity.version;
+            recreate();
+            return;
+        }
         promptsPaused = false;
-        if (rebuildOnResume) {
+        // Back from an app: rebuild only when apps were installed, removed or changed, or Jump back in has a new
+        // order; otherwise the tiles are current and only the focus goes back (a rebuild reloads every tile).
+        if (rebuildOnResume || appsChanged || packagesChangedMeanwhile() || adapter.recentsChanged()) {
             tilesReady = false;
             reloadApps(true);
+        } else if (refocusOnResume) {
+            restoreFocus();
         }
         rebuildOnResume = false;
+        refocusOnResume = false;
+        appsChanged = false;
         ensureServices();
         updateGreeting();
         // The Wi-Fi and Inputs labels keep their state while Home is in the background and callbacks update them, so
@@ -475,7 +514,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == LAUNCHER_SETTINGS_REQUEST && resultCode == RESULT_OK) recreate();
+        // Launcher settings are applied by onResume (LauncherSettingsActivity.version), however that screen was left.
     }
 
     /** Rebuilds the tiles (and the module cards), then puts focus back where it was. */
@@ -586,11 +625,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
     @Override
     protected void onStop() {
         super.onStop();
-        unregisterReceiver(packageReceiver);
         unregisterReceiver(timeReceiver);
         handler.removeCallbacks(clockCheck);
         stopped = true;
-        rebuildOnResume = true;
+        refocusOnResume = true;
     }
 
     @Override
@@ -602,6 +640,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        unregisterReceiver(packageReceiver);
         ConnectivityManager cm = getSystemService(ConnectivityManager.class);
         TvInputManager tim = (TvInputManager) getSystemService(TV_INPUT_SERVICE);
         if (tim != null) tim.unregisterCallback(inputCallback);
@@ -711,6 +750,19 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
                 Toast.makeText(this, getString(R.string.dock_replaced, chosen.label), Toast.LENGTH_SHORT).show();
             });
         });
+    }
+
+    private static boolean homeLostShown;
+
+    /** Once per boot: a TV update gave Home back to the stock launcher; Dante TV covers for it until fixed. */
+    private void explainHomeLost() {
+        if (homeLostShown) return;
+        homeLostShown = true;
+        new android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle(R.string.home_lost_title)
+                .setMessage(getString(R.string.home_lost_body, getPackageName()))
+                .setPositiveButton(android.R.string.ok, null)
+                .show();
     }
 
     private void startMove(String key) {
@@ -1050,7 +1102,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
         for (int i = 0; i < items.length; i++) {
             View item = items[i];
             menuLabels.add((TextView) ((ViewGroup) item).getChildAt(1));
-            final boolean first = i == 0, last = i == items.length - 1;
+            final int index = i;
             item.setOnKeyListener((v, keyCode, event) -> {
                 if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
                 if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
@@ -1059,8 +1111,20 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
                     return true;
                 }
                 if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) return true;
-                if (keyCode == KeyEvent.KEYCODE_DPAD_UP) return first;
-                return keyCode == KeyEvent.KEYCODE_DPAD_DOWN && last;
+                // Up and Down step through the rail itself: left to the focus search, Down from Optimize found the
+                // dock's first tile (level with Settings once the rail is open) and closed the menu.
+                if (keyCode == KeyEvent.KEYCODE_DPAD_UP || keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                    int step = keyCode == KeyEvent.KEYCODE_DPAD_UP ? -1 : 1;
+                    // Skip rows that are hidden on this TV (Inputs without any inputs).
+                    for (int j = index + step; j >= 0 && j < items.length; j += step) {
+                        if (items[j].getVisibility() == View.VISIBLE) {
+                            items[j].requestFocus();
+                            break;
+                        }
+                    }
+                    return true;
+                }
+                return false;
             });
             if (animations) {
                 item.setOnFocusChangeListener((view, focused) -> view.animate()
@@ -1794,6 +1858,64 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
             fillBluetooth(rows, popup, bt);
             rows.getChildAt(0).requestFocus();
         });
+        addInputRow(rows, popup, R.drawable.ic_shield, getString(R.string.dns), -1, () -> { });
+        View dnsRow = rows.getChildAt(rows.getChildCount() - 1);
+        TextView dnsStatus = dnsRow.findViewById(R.id.status);
+        dnsStatus.setText(adguardDns() ? R.string.dns_adguard : R.string.dns_default);
+        dnsStatus.setVisibility(View.VISIBLE);
+        dnsRow.setOnClickListener(v -> {
+            fillDns(rows, popup);
+            rows.getChildAt(adguardDns() ? 1 : 0).requestFocus();
+        });
+    }
+
+    private static final String ADGUARD_DNS = "dns.adguard-dns.com";
+
+    private boolean adguardDns() {
+        return "hostname".equals(Settings.Global.getString(getContentResolver(), "private_dns_mode"))
+                && ADGUARD_DNS.equals(Settings.Global.getString(getContentResolver(), "private_dns_specifier"));
+    }
+
+    /** Private DNS: the network's own (Default) or AdGuard, which blocks ad and tracker domains for every app. */
+    private void fillDns(LinearLayout rows, PopupWindow popup) {
+        rows.removeAllViews();
+        boolean adguard = adguardDns();
+        int[] labels = {R.string.dns_default, R.string.dns_adguard};
+        for (int i = 0; i < 2; i++) {
+            final boolean pick = i == 1;
+            addInputRow(rows, popup, R.drawable.ic_shield, getString(labels[i]), -1, () -> { });
+            View row = rows.getChildAt(rows.getChildCount() - 1);
+            boolean on = pick == adguard;
+            TextView st = row.findViewById(R.id.status);
+            st.setText(on ? getString(R.string.dns_in_use) : "");
+            st.setVisibility(on ? View.VISIBLE : View.GONE);
+            row.findViewById(R.id.dot).setVisibility(on ? View.VISIBLE : View.GONE);
+            row.setOnClickListener(v -> {
+                if (!setDns(pick)) {
+                    Toast.makeText(this, R.string.dns_no_permission, Toast.LENGTH_LONG).show();
+                    return;
+                }
+                Toast.makeText(this, pick ? R.string.dns_now_adguard : R.string.dns_now_default, Toast.LENGTH_SHORT).show();
+                fillQuick(rows, popup);
+                rows.getChildAt(rows.getChildCount() - 1).requestFocus();
+            });
+        }
+    }
+
+    /** Needs WRITE_SECURE_SETTINGS (pm grant, as for the accessibility self-heal); false without it. */
+    private boolean setDns(boolean adguard) {
+        try {
+            android.content.ContentResolver cr = getContentResolver();
+            if (adguard) {
+                Settings.Global.putString(cr, "private_dns_specifier", ADGUARD_DNS);
+                Settings.Global.putString(cr, "private_dns_mode", "hostname");
+            } else {
+                Settings.Global.putString(cr, "private_dns_mode", "opportunistic");
+            }
+            return true;
+        } catch (SecurityException e) {
+            return false;
+        }
     }
 
     /** Paired headphones and speakers: OK connects one; Pair new device opens Bluetooth settings. */
@@ -1892,6 +2014,21 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
 
     private boolean optimizing;
     private boolean shelfReleased;
+    /** LauncherSettingsActivity.version this Home was built with. */
+    private int settingsVersion = LauncherSettingsActivity.version;
+    /** Back from an app with nothing changed: put the focus back instead of rebuilding the tiles. */
+    private boolean refocusOnResume;
+    /** A package broadcast arrived while Home was in the background. */
+    private boolean appsChanged;
+    /** PackageManager's change counter at the last check, to catch a broadcast that never arrived. */
+    private int packageSequence;
+
+    private boolean packagesChangedMeanwhile() {
+        android.content.pm.ChangedPackages changed = getPackageManager().getChangedPackages(packageSequence);
+        if (changed == null) return false;
+        packageSequence = changed.getSequenceNumber();
+        return true;
+    }
 
     /**
      * Frees memory by force-stopping the apps that have run since they were last stopped, through

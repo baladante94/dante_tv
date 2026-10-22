@@ -19,6 +19,8 @@ public class InputKeyService extends AccessibilityService {
 
     private SidePanel panel;
     private String foreground;
+    /** Other launchers' home screens (HomeGuard.otherHomes), looked up on the first window change. */
+    private java.util.Set<String> otherHomes;
     private final android.os.Handler handler = new android.os.Handler(android.os.Looper.getMainLooper());
 
     @Override
@@ -27,9 +29,13 @@ public class InputKeyService extends AccessibilityService {
         // drew the original one is disabled). This Philips/Skyworth remote sends it as KEYCODE_NOTIFICATION (83,
         // scancode 240), as TCL Google TV remotes do; standard remotes send KEYCODE_SETTINGS.
         int code = event.getKeyCode();
+        TitleFollowUp.onKey(this, event, foreground);
         if (code == KeyEvent.KEYCODE_HOME) {
             if (panel != null && panel.isOpen()) panel.close();
-            return false;
+            // A TV update made the stock launcher the default again: Home still brings Dante TV.
+            if (HomeGuard.isDefaultHome(this)) return false;
+            if (event.getAction() == KeyEvent.ACTION_UP) HomeGuard.openHome(this, false);
+            return true;
         }
         if (code == KeyEvent.KEYCODE_SETTINGS || code == KeyEvent.KEYCODE_NOTIFICATION) {
             if (event.getAction() == KeyEvent.ACTION_UP) {
@@ -71,6 +77,14 @@ public class InputKeyService extends AccessibilityService {
         if (event.getEventType() != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED || event.getPackageName() == null) return;
         if (panel != null && panel.isOpen() && getPackageName().contentEquals(event.getPackageName())) return;
         foreground = event.getPackageName().toString();
+        TitleFollowUp.onWindow(foreground);
+        // Safety net for the Home guard: the stock home screen came up some other way than the Home key (an app sent
+        // the TV home, the firmware turned the stock launcher back on). Only while Dante TV is not the default.
+        CharSequence cls = event.getClassName();
+        if (cls != null && !getPackageName().equals(foreground)) {
+            if (otherHomes == null) otherHomes = HomeGuard.otherHomes(this);
+            if (otherHomes.contains(cls.toString()) && !HomeGuard.isDefaultHome(this)) HomeGuard.openHome(this, false);
+        }
     }
 
     @Override

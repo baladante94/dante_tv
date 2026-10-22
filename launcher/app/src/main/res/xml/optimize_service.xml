@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Only ever reads the TV Settings and Picture settings apps, and only while Optimize or MEMC is running. -->
+<!-- Only ever reads the TV Settings and Picture settings apps while Optimize or MEMC runs, and JioHotstar for a minute after a Top Shelf card opened it (to get past its profile picker). -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
-    android:packageNames="com.android.tv.settings,com.mediatek.tv.settings"
+    android:packageNames="com.android.tv.settings,com.mediatek.tv.settings,in.startv.hotstar"
     android:notificationTimeout="80"
     android:canRetrieveWindowContent="true"
     android:description="@string/optimize_service_description" />

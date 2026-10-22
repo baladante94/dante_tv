@@ -13,6 +13,8 @@ import android.view.ViewOutlineProvider;
 import android.view.animation.DecelerateInterpolator;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
+import android.widget.Toast;
+import android.net.Uri;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
@@ -293,10 +295,68 @@ final class TopShelf {
 
     private void open(int at) {
         if (at >= shown.size()) return;
-        Intent app = activity.getPackageManager().getLeanbackLaunchIntentForPackage(shown.get(at).pkg);
+        Trending.Item t = shown.get(at);
+        Intent title = titleIntent(t);
+        if (title != null) {
+            try {
+                if (t.pkg.equals("com.netflix.ninja")) TitleFollowUp.netflix(title);
+                activity.startActivity(title);
+                if (t.pkg.equals("in.startv.hotstar") && !t.hotstarUrl.isEmpty()) {
+                    OptimizeService.resendAfterHotstarProfile(title);
+                }
+                if (t.pkg.equals("in.startv.hotstar") && t.hotstarUrl.isEmpty()) {
+                    Toast.makeText(activity, activity.getString(R.string.shelf_search_for, t.title), Toast.LENGTH_LONG).show();
+                }
+                AppAdapter.opened(activity, t.pkg);
+                return;
+            } catch (Exception ignored) {
+                // The app would not take the link: open it as usual.
+            }
+        }
+        Intent app = activity.getPackageManager().getLeanbackLaunchIntentForPackage(t.pkg);
         if (app == null) return;
         activity.startActivity(app.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
-        AppAdapter.opened(activity, shown.get(at).pkg);
+        AppAdapter.opened(activity, t.pkg);
+    }
+
+    /** Delivered to the app's running screen when it is open, or starts it: tested both ways for each app. */
+    private static final int TITLE_FLAGS = Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP
+            | Intent.FLAG_ACTIVITY_SINGLE_TOP;
+
+    /**
+     * The card's title in its own app, as each one accepts it (tried on a Philips Google TV, with the app closed
+     * and with it open in the background): Netflix opens netflix.com/title/<id> sent the way Google TV's launcher
+     * sends it (source 30) to the running app (a restart would show its profile picker and drop the link), Apple TV a tv.apple.com show or film link, Crunchyroll crunchyroll://series/<id>, and
+     * JioHotstar its hotstar.com page. Null when the title's ID is not known: the card then opens the app, except
+     * JioHotstar, which opens its search screen (it ignores a query, so a toast says what to look for).
+     */
+    private static Intent titleIntent(Trending.Item t) {
+        switch (t.pkg) {
+            case "com.netflix.ninja":
+                if (t.netflixId.isEmpty()) return null;
+                return new Intent(Intent.ACTION_VIEW, Uri.parse("http://www.netflix.com/title/" + t.netflixId))
+                        .addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER)
+                        .setClassName("com.netflix.ninja", "com.netflix.ninja.MainActivity")
+                        .putExtra("source", "30").addFlags(TITLE_FLAGS);
+            case "com.apple.atve.androidtv.appletv": {
+                if (t.appleId.isEmpty()) return null;
+                String country = t.region.isEmpty() ? "us" : t.region.toLowerCase(java.util.Locale.ROOT);
+                String slug = t.title.toLowerCase(java.util.Locale.ROOT).replaceAll("[^a-z0-9]+", "-").replaceAll("^-|-$", "");
+                String url = "https://tv.apple.com/" + country + (t.series ? "/show/" : "/movie/")
+                        + (slug.isEmpty() ? "title" : slug) + "/" + t.appleId;
+                return new Intent(Intent.ACTION_VIEW, Uri.parse(url)).setPackage(t.pkg).addFlags(TITLE_FLAGS);
+            }
+            case "com.crunchyroll.crunchyroid":
+                // Crunchyroll ignores search requests and episode links; a series opens from its ID, films open the app.
+                if (t.crunchyrollId.isEmpty()) return null;
+                return new Intent(Intent.ACTION_VIEW, Uri.parse("crunchyroll://series/" + t.crunchyrollId))
+                        .setClassName(t.pkg, "com.crunchyroll.crunchyroid.main.ui.MainActivity").addFlags(TITLE_FLAGS);
+            case "in.startv.hotstar":
+                return new Intent(Intent.ACTION_VIEW, Uri.parse(t.hotstarUrl.isEmpty()
+                        ? "https://www.hotstar.com/in/explore" : t.hotstarUrl)).setPackage(t.pkg).addFlags(TITLE_FLAGS);
+            default:
+                return null;
+        }
     }
 
     /** Gives the decoded pictures back when the system runs short; they are decoded again from disk on return. */

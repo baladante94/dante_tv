@@ -39,7 +39,7 @@ public final class LauncherSettingsActivity extends Activity {
                 if (columns == value) return;
                 columns = value;
                 choices.edit().putInt("columns", value).apply();
-                setResult(RESULT_OK);
+                changed();
                 refresh();
             });
         }
@@ -49,7 +49,7 @@ public final class LauncherSettingsActivity extends Activity {
             if (!animations) advancedEffects = false;
             choices.edit().putBoolean("animations", animations)
                     .putBoolean("advanced_effects", advancedEffects).apply();
-            setResult(RESULT_OK);
+            changed();
             refresh();
         });
         advancedChoice = findViewById(R.id.advancedChoice);
@@ -73,7 +73,7 @@ public final class LauncherSettingsActivity extends Activity {
             columns = current.columns;
             animations = current.animations;
             advancedEffects = current.animations && current.advancedEffects;
-            setResult(RESULT_OK);
+            changed();
             refresh();
         });
         findViewById(R.id.defaultHomeChoice).setOnClickListener(v -> {
@@ -86,10 +86,21 @@ public final class LauncherSettingsActivity extends Activity {
         columnChoices[Math.max(0, Math.min(columns - 4, 3))].requestFocus();
     }
 
+    /**
+     * Counts every change made here. Home compares it on each return, so the change applies however this screen
+     * was left: Back delivers the activity result, but the Home key skips it.
+     */
+    static volatile int version;
+
+    private void changed() {
+        version++;
+        setResult(RESULT_OK);
+    }
+
     private void setAdvanced(boolean enabled) {
         advancedEffects = enabled;
         choices.edit().putBoolean("advanced_effects", enabled).apply();
-        setResult(RESULT_OK);
+        changed();
         refresh();
     }
 
