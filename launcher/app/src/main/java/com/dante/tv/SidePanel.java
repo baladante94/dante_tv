@@ -51,7 +51,7 @@ import java.util.Set;
 final class SidePanel {
 
     private static final int[] SLEEP_STEPS = {0, 15, 30, 60, 90};
-    private static final int MAIN = 0, WIFI = 1, BLUETOOTH = 2, INPUTS = 3, MEMC = 4;
+    private static final int MAIN = 0, WIFI = 1, BLUETOOTH = 2, INPUTS = 3, MEMC = 4, LIGHTS = 5;
 
     private final Context ctx;
     private final WindowManager wm;
@@ -98,7 +98,7 @@ final class SidePanel {
                 boolean left = code == KeyEvent.KEYCODE_DPAD_LEFT;
                 if (code == KeyEvent.KEYCODE_BACK || left && (page != MAIN || !hasFocusOnRow())) {
                     if (e.getAction() == KeyEvent.ACTION_UP) {
-                        if (page != MAIN) showMain(page == MEMC ? 4 : page - 1);
+                        if (page != MAIN) showMain(page == MEMC ? 4 : page == LIGHTS ? lightsRow() : page - 1);
                         else close();
                     }
                     return true;
@@ -167,6 +167,8 @@ final class SidePanel {
         addRow(R.drawable.ic_picture, ctx.getString(R.string.side_picture), null, v -> go(new Intent(Settings.ACTION_DISPLAY_SETTINGS)));
         // The TV's live value would need its Picture screens opened; this is the last value set from here.
         if (hasMemc()) addRow(R.drawable.ic_picture, "MEMC", memcSet(), v -> showMemc(0));
+        // Only where a Magic Home controller answers on this network (Lights looks at start-up and on Wi-Fi changes).
+        if (Lights.get(ctx).reachable()) addRow(R.drawable.ic_bulb, ctx.getString(R.string.lights), lightsMode(), v -> showLights(0));
         // The TV's own Sound screen; the general sound link opens Display & Sound at picture and scaling.
         addRow(R.drawable.ic_sound, ctx.getString(R.string.side_sound), null, v -> {
             Intent sound = new Intent("com.android.tv.action.VIEW_SOUND_SETTINGS");
@@ -242,9 +244,77 @@ final class SidePanel {
                         : ctx.getString(R.string.optimize_nothing),
                 ctx.getString(R.string.optimize_free_now, android.text.format.Formatter.formatShortFileSize(ctx, now.availMem),
                         android.text.format.Formatter.formatShortFileSize(ctx, now.totalMem))};
-        int row = hasMemc() ? 7 : 6;
+        int row = lightsRow() + (Lights.get(ctx).reachable() ? 3 : 2);
         if (window != null) showMain(row);
         else open(row);
+    }
+
+    // ---- Lights ------------------------------------------------------------------------------------
+
+    private static final String[] COLOUR_NAMES = {"Blue", "Rainbow", "Purple", "Pink", "Red", "Amber", "Warm white", "Green", "Cyan"};
+
+    private int lightsRow() {
+        return hasMemc() ? 5 : 4;
+    }
+
+    private String lightsMode() {
+        switch (Lights.get(ctx).mode()) {
+            case Lights.OFF: return ctx.getString(R.string.lights_off);
+            case Lights.STATIC: return ctx.getString(R.string.lights_static);
+            case Lights.SOUND: return ctx.getString(R.string.lights_sound);
+            default: return null;
+        }
+    }
+
+    private void showLights(int focus) {
+        Lights lights = Lights.get(ctx);
+        openPage(LIGHTS, R.string.lights);
+        String mode = lightsMode();
+        addRow(R.drawable.ic_bulb, ctx.getString(R.string.lights_mode), mode == null ? ctx.getString(R.string.lights_off) : mode, v -> {
+            int next = lights.mode() == Lights.STATIC ? Lights.SOUND : lights.mode() == Lights.SOUND ? Lights.OFF : Lights.STATIC;
+            if (next == Lights.SOUND && !Lights.audioAllowed(ctx)) Toast.makeText(ctx, R.string.lights_mic, Toast.LENGTH_LONG).show();
+            lights.setMode(next);
+            showLights(0);
+        });
+        int at = 0;
+        for (int i = 0; i < Lights.COLOURS.length; i++) if (Lights.COLOURS[i] == lights.colour()) at = i;
+        final int colourAt = at;
+        View colour = addRow(R.drawable.ic_bulb, ctx.getString(R.string.lights_colour), COLOUR_NAMES[at], v -> {
+            lights.setColour(Lights.COLOURS[(colourAt + 1) % Lights.COLOURS.length]);
+            showLights(1);
+        });
+        if (lights.colour() != Lights.RAINBOW) ((ImageView) colour.findViewById(R.id.sideIcon)).setColorFilter(lights.colour());
+        int b = 0;
+        for (int i = 0; i < Lights.BRIGHTNESS.length; i++) if (Lights.BRIGHTNESS[i] == lights.brightness()) b = i;
+        final int brightAt = b;
+        addRow(R.drawable.ic_bulb, ctx.getString(R.string.lights_brightness), lights.brightness() + "%", v -> {
+            lights.setBrightness(Lights.BRIGHTNESS[(brightAt + 1) % Lights.BRIGHTNESS.length]);
+            showLights(2);
+        });
+        View find = addRow(R.drawable.ic_wifi, ctx.getString(R.string.lights_find), lightsAddress(), null);
+        find.setOnClickListener(v -> findLights(find));
+        TextView note = new TextView(ctx);
+        note.setText(R.string.lights_note);
+        note.setTextColor(0x99FFFFFF);
+        note.setTextSize(12);
+        note.setPadding((int) (16 * density), (int) (10 * density), (int) (16 * density), 0);
+        rows.addView(note);
+        focusRow(focus);
+        if (!lights.found()) findLights(find);
+    }
+
+    private String lightsAddress() {
+        String ip = ctx.getSharedPreferences("lights", Context.MODE_PRIVATE).getString("ip", "");
+        if (ip.isEmpty()) return ctx.getString(R.string.lights_not_found);
+        return Lights.get(ctx).reachable() ? ip : ctx.getString(R.string.lights_other_wifi);
+    }
+
+    private void findLights(View row) {
+        TextView st = row.findViewById(R.id.sideStatus);
+        st.setText(R.string.lights_searching);
+        Lights.get(ctx).find(ok -> handler.post(() -> {
+            if (page == LIGHTS) st.setText(lightsAddress());
+        }));
     }
 
     // ---- MEMC --------------------------------------------------------------------------------------

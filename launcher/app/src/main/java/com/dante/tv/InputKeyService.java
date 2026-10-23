@@ -24,6 +24,11 @@ public class InputKeyService extends AccessibilityService {
     private final android.os.Handler handler = new android.os.Handler(android.os.Looper.getMainLooper());
 
     @Override
+    protected void onServiceConnected() {
+        Lights.get(this).start();
+    }
+
+    @Override
     protected boolean onKeyEvent(KeyEvent event) {
         // The remote's Settings button: Dante TV's side panel, over any app (the stock Google TV home that
         // drew the original one is disabled). This Philips/Skyworth remote sends it as KEYCODE_NOTIFICATION (83,
