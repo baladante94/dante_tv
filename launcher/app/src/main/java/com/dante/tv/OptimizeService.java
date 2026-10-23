@@ -283,34 +283,6 @@ public class OptimizeService extends AccessibilityService {
     @Override
     protected void onServiceConnected() {
         instance = this;
-        // After a start-up (a power cut included) the TV may have dropped the MEMC chosen in the side panel.
-        handler.postDelayed(this::memcAtBoot, 25_000);
-    }
-
-    /**
-     * Once per boot: put back the MEMC chosen in the side panel, behind the cover. The TV keeps picture settings only
-     * across a clean standby, so a power cut sends MEMC back to the picture mode's default. Nothing is playing yet,
-     * so the Picture screens run hidden for a few seconds.
-     */
-    private void memcAtBoot() {
-        android.content.SharedPreferences prefs = getSharedPreferences("side_panel", MODE_PRIVATE);
-        String wanted = prefs.getString("memc", null);
-        int boot = Settings.Global.getInt(getContentResolver(), Settings.Global.BOOT_COUNT, -1);
-        if (wanted == null || boot < 0 || prefs.getInt("memc_boot", -2) == boot) return;
-        try {
-            getPackageManager().getPackageInfo(PQ, 0);
-        } catch (Exception e) {
-            return;
-        }
-        if (pkgs != null || memcTarget != null) {
-            handler.postDelayed(this::memcAtBoot, 10_000);
-            return;
-        }
-        prefs.edit().putInt("memc_boot", boot).apply();   // once, even if it fails
-        showCover();
-        ((TextView) cover.findViewById(R.id.coverTitle)).setText(R.string.memc_boot_title);
-        progress.setText(getString(R.string.memc_boot_progress, wanted));
-        startMemc(wanted, ok -> handler.postDelayed(this::removeCover, 300));
     }
 
     @Override

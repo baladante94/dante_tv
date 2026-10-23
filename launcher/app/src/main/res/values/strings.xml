@@ -110,10 +110,7 @@
     <string name="side_picture">Picture</string>
     <string name="side_sound">Sound</string>
     <string name="side_all_settings">All settings</string>
-    <string name="memc_boot_title">Picture settings</string>
-    <string name="memc_boot_progress">Putting MEMC back to %1$s</string>
-    <string name="memc_kept">%1$s · kept</string>
-    <string name="memc_note">Dante TV puts your choice back each time the TV starts (a power cut resets it). Picture modes keep their own MEMC, so Dolby Vision or HDR may differ.</string>
+    <string name="memc_note_last">Shows the last value set here. The TV keeps MEMC per picture mode, and a full power-off can reset it.</string>
     <string name="memc_changing">Changing MEMC to %1$s…</string>
     <string name="memc_failed">Couldn\'t change MEMC. Opening Picture settings.</string>
     <string name="move_app">Move</string>
