@@ -291,6 +291,21 @@ final class SidePanel {
             lights.setBrightness(Lights.BRIGHTNESS[(brightAt + 1) % Lights.BRIGHTNESS.length]);
             showLights(2);
         });
+        // The Bluetooth controller's own music effects, unlabelled by the maker: stepped through on the strip itself.
+        if (lights.mode() == Lights.SOUND && lights.bleConnected()) {
+            int effect = lights.bleEffect();
+            addRow(R.drawable.ic_sound, ctx.getString(R.string.lights_effect), (effect + 1) + " / " + BleLight.EFFECTS, v -> {
+                lights.setBleEffect((effect + 1) % BleLight.EFFECTS);
+                showLights(3);
+            });
+            int sens = lights.bleSensitivity(), s = 0;
+            for (int i = 0; i < BleLight.SENSITIVITY.length; i++) if (BleLight.SENSITIVITY[i] == sens) s = i;
+            final int sensAt = s;
+            addRow(R.drawable.ic_sound, ctx.getString(R.string.lights_sensitivity), sens + "%", v -> {
+                lights.setBleSensitivity(BleLight.SENSITIVITY[(sensAt + 1) % BleLight.SENSITIVITY.length]);
+                showLights(4);
+            });
+        }
         View find = addRow(R.drawable.ic_wifi, ctx.getString(R.string.lights_find), lightsAddress(), null);
         find.setOnClickListener(v -> findLights(find));
         TextView note = new TextView(ctx);
@@ -304,9 +319,13 @@ final class SidePanel {
     }
 
     private String lightsAddress() {
+        Lights lights = Lights.get(ctx);
         String ip = ctx.getSharedPreferences("lights", Context.MODE_PRIVATE).getString("ip", "");
-        if (ip.isEmpty()) return ctx.getString(R.string.lights_not_found);
-        return Lights.get(ctx).reachable() ? ip : ctx.getString(R.string.lights_other_wifi);
+        String bt = lights.bleName();
+        if (ip.isEmpty() && bt == null) return ctx.getString(R.string.lights_not_found);
+        if (ip.isEmpty()) return bt;
+        String wifi = lights.reachable() ? ip : ctx.getString(R.string.lights_other_wifi);
+        return bt == null ? wifi : wifi + " · " + bt;
     }
 
     private void findLights(View row) {

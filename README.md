@@ -34,15 +34,19 @@ and All settings. Optimize from here leaves the app you're watching running. Hom
 playing. MediaTek TVs only, with the TV menu in English. The TV keeps MEMC per picture mode, so set
 it once while watching SDR, HDR and Dolby Vision content.
 
-**Lights** (experimental) drives a Magic Home Wi-Fi LED controller behind the TV, locally, with no
-cloud. The row appears in the ⚙ panel only when a controller answers on your Wi-Fi.
+**Lights** (experimental) drives LED controllers locally, with no cloud: a Magic Home Wi-Fi
+controller, and/or a Bluetooth LotusLamp X one (ELK-BLEDOM/MELK family), which keeps working whatever
+Wi-Fi the TV is on. The row appears in the ⚙ panel only when a controller answers.
+- A Bluetooth controller's Sound mode uses its own built-in mic, with a choice of its 8 music
+  effects and the mic's sensitivity from the panel; the TV records nothing for it.
 - **Static**: one colour and brightness. **Sound**: pulses with what's playing, following the lows,
   mids and highs, with a flash on each kick. The **Rainbow** colour fades through every hue, or
   drifts and jumps with the beat in Sound.
 - The strip turns on and off with the TV and picks up again by itself after a Wi-Fi change.
-- Sound reads the TV's own audio mix. When an HDMI input sends Dolby straight to the soundbar
-  (a Fire TV, say), it uses the TV's microphone instead. Only levels are worked out, on the TV,
-  and nothing is recorded. It needs one permission:
+- Sound listens through the TV's microphone, so it works with every app and HDMI input. Only
+  levels are worked out, on the TV, and nothing is recorded; the TV shows its mic icon while
+  Sound pulses. (Reading the TV's audio output directly resets the hardware Dolby path on
+  MediaTek TVs, which broke Apple TV playback until a restart.) It needs one permission:
   `adb shell pm grant com.dante.tv android.permission.RECORD_AUDIO`
 - The TV and the controller have to be on the same router. Tested only with an AK001-ZJ21412
   RGB controller (Zengge, model 0x33); addressable (per-LED) strips use other commands.

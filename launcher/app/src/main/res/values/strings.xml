@@ -144,6 +144,8 @@
     <string name="tmdb_credit">This product uses the TMDB API but is not endorsed or certified by TMDB.</string>
     <string name="lights">Lights</string>
     <string name="lights_mode">Mode</string>
+    <string name="lights_effect">Music effect</string>
+    <string name="lights_sensitivity">Mic sensitivity</string>
     <string name="lights_colour">Colour</string>
     <string name="lights_brightness">Brightness</string>
     <string name="lights_find">Find lights</string>
@@ -153,6 +155,6 @@
     <string name="lights_off">Off</string>
     <string name="lights_static">Static</string>
     <string name="lights_sound">Sound</string>
-    <string name="lights_note">Magic Home LED controller on this Wi-Fi. Lights follow the TV on and off. Sound follows the lows, mids and highs of what plays, worked out on the TV; nothing is recorded. The Rainbow colour goes through every hue.</string>
-    <string name="lights_mic">Allow audio access: adb shell pm grant com.dante.tv android.permission.RECORD_AUDIO</string>
+    <string name="lights_note">LED controllers on this Wi-Fi (Magic Home) or over Bluetooth (LotusLamp X). Lights follow the TV on and off. In Sound mode a Bluetooth controller listens with its own mic; a Magic Home strip follows the TV\'s mic, worked out on the TV, nothing recorded. The Rainbow colour goes through every hue.</string>
+    <string name="lights_mic">Allow the microphone: adb shell pm grant com.dante.tv android.permission.RECORD_AUDIO</string>
 </resources>

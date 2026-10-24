@@ -11,7 +11,6 @@ import android.media.AudioFormat;
 import android.media.AudioManager;
 import android.media.AudioRecord;
 import android.media.MediaRecorder;
-import android.media.audiofx.Visualizer;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.SystemClock;
@@ -28,11 +27,11 @@ import java.nio.charset.StandardCharsets;
 /**
  * An LED strip behind the TV on a Magic Home (Zengge) Wi-Fi controller, driven over the home network: found with
  * the controller's own UDP discovery, then sent its 5577 commands directly, no cloud. It follows the TV: on with the
- * screen, off in standby. In Sound mode, while something plays, it follows the TV's own output mix (Visualizer):
- * lows, mids and highs, worked out on the TV every 40 ms; nothing is recorded or sent anywhere. When the mix is empty
- * while something plays (an HDMI input's Dolby bitstream goes straight to the soundbar), the TV's microphone, which
- * hears the soundbar, stands in until an app's sound is back in the mix. Audio is read only
- * while Sound mode is on, the screen is on and something plays.
+ * screen, off in standby. In Sound mode, while something plays, it follows the lows, mids and highs every 40 ms:
+ * from the TV's microphone hearing the soundbar, worked out on the TV; nothing is recorded or sent anywhere. The mic
+ * is open only while Sound mode is on, the screen is on and something plays. (Reading the TV's output mix with a
+ * Visualizer was tried: switching one on makes Android reset the hardware Dolby path, and on this TV that jammed the
+ * audio driver for Apple TV until a restart. Other apps' own audio sessions are hidden from apps.)
  */
 final class Lights {
 
@@ -55,6 +54,7 @@ final class Lights {
     private long lastRediscover, failedAt;
     /** False while the controller doesn't answer, as when the TV is on another router's Wi-Fi. */
     private volatile boolean reachable;
+    private final BleLight ble;
 
     static synchronized Lights get(Context ctx) {
         if (instance == null) instance = new Lights(ctx.getApplicationContext());
@@ -67,6 +67,7 @@ final class Lights {
         HandlerThread t = new HandlerThread("lights");
         t.start();
         net = new Handler(t.getLooper());
+        ble = new BleLight(ctx, prefs, net, this::apply);
     }
 
     // ---- settings ----------------------------------------------------------------------------------
@@ -84,7 +85,38 @@ final class Lights {
     }
 
     boolean found() {
+        return wifi() || ble.known();
+    }
+
+    /** A Magic Home controller on the Wi-Fi; the Bluetooth one (BleLight) can be there too, or instead. */
+    private boolean wifi() {
         return !prefs.getString("ip", "").isEmpty();
+    }
+
+    int bleEffect() {
+        return prefs.getInt("ble_effect", 0);
+    }
+
+    void setBleEffect(int effect) {
+        prefs.edit().putInt("ble_effect", effect).apply();
+        net.post(() -> {
+            if (mode() == SOUND) ble.effect();
+        });
+    }
+
+    int bleSensitivity() {
+        return prefs.getInt("ble_sens", 40);
+    }
+
+    void setBleSensitivity(int percent) {
+        prefs.edit().putInt("ble_sens", percent).apply();
+        net.post(() -> {
+            if (mode() == SOUND) ble.sensitivity();
+        });
+    }
+
+    String bleName() {
+        return ble.known() ? ble.name() : null;
     }
 
     void setMode(int mode) {
@@ -139,6 +171,11 @@ final class Lights {
             });
         }
         net.post(this::lookQuietly);
+        net.postDelayed(recheck, 60_000);
+        net.post(() -> {
+            if (ble.known()) ble.connect();
+            else ble.scan(null);
+        });
         net.post(this::apply);
     }
 
@@ -150,6 +187,19 @@ final class Lights {
         String[] f = discover();
         reachable = f != null;
         if (f != null) prefs.edit().putString("ip", f[0]).putString("mac", f[1]).apply();
+    }
+
+    /** A Magic Home controller unplugged in Static mode sends no failure: look again every minute the screen is on. */
+    private final Runnable recheck = new Runnable() {
+        @Override
+        public void run() {
+            if (screenOn && wifi()) lookQuietly();
+            net.postDelayed(this, 60_000);
+        }
+    };
+
+    boolean bleConnected() {
+        return ble.connected();
     }
 
     private int retries;
@@ -164,7 +214,7 @@ final class Lights {
     };
 
     boolean reachable() {
-        return reachable;
+        return reachable || ble.connected();
     }
 
     /** Sound mode only: is something playing? Checked once a second while the screen is on; apply() starts it. */
@@ -187,7 +237,8 @@ final class Lights {
         int mode = mode();
         net.removeCallbacks(rainbow);
         net.removeCallbacks(watchPlayback);
-        if (mode == SOUND && screenOn && found()) net.postDelayed(watchPlayback, 1000);
+        // The TV's mic only serves the Magic Home strip, and only while its controller answers.
+        if (mode == SOUND && screenOn && wifi() && reachable) net.postDelayed(watchPlayback, 1000);
         else playing = false;
         if (mode == UNSET || !found()) {
             stopListening();
@@ -195,17 +246,30 @@ final class Lights {
         }
         if (mode == OFF || !screenOn) {
             stopListening();
-            send(power(false));
+            if (wifi()) send(power(false));
+            ble.power(false);
             return;
         }
-        send(power(true));
-        if (mode == SOUND && playing && audioAllowed(ctx)) {
-            startListening();
-        } else {
-            stopListening();
+        if (wifi()) send(power(true));
+        ble.power(true);
+        ble.brightness(brightness());
+        if (mode == SOUND) ble.sound(true);   // the Bluetooth controller listens with its own mic, playing or not
+        boolean steadyWifi = !(mode == SOUND && playing && audioAllowed(ctx));
+        if (wifi() && reachable && !steadyWifi) startListening();
+        else stopListening();
+        if (steadyWifi || mode != SOUND) {
             if (colour() == RAINBOW) net.post(rainbow);
-            else send(colour(scaled(colour(), brightness() / 100f), true));
+            else out(colour(), true);
         }
+    }
+
+    /**
+     * A full-brightness colour to every controller there is: the Magic Home one gets it dimmed to the brightness setting,
+     * the Bluetooth one has its own brightness command. In Sound mode the Bluetooth one keeps its own music effect.
+     */
+    private void out(int c, boolean keep) {
+        if (wifi()) send(colour(scaled(c, brightness() / 100f), keep));
+        if (mode() != SOUND) ble.colour(c);
     }
 
     private float rainbowHue;
@@ -215,7 +279,7 @@ final class Lights {
         @Override
         public void run() {
             rainbowHue = (rainbowHue + 2) % 360;
-            send(colour(Color.HSVToColor(new float[]{rainbowHue, 1f, brightness() / 100f}), false));
+            out(Color.HSVToColor(new float[]{rainbowHue, 1f, 1f}), false);
             net.postDelayed(this, 100);
         }
     };
@@ -240,62 +304,23 @@ final class Lights {
      * well over their recent average) turns it a step.
      */
     private void listen() {
-        Visualizer vis;
-        byte[] fft;
-        try {
-            vis = new Visualizer(0);
-            int[] range = Visualizer.getCaptureSizeRange();
-            vis.setCaptureSize(Math.max(range[0], Math.min(range[1], 1024)));
-            vis.setEnabled(true);
-            fft = new byte[vis.getCaptureSize()];
-        } catch (Exception | Error e) {
-            android.util.Log.w("TvHome.Lights", "no visualizer", e);
+        AudioRecord mic = openMic();
+        if (mic == null) {
             listening = false;
             return;
         }
-        int n = fft.length;
-        double hzPerBin = vis.getSamplingRate() / 1000.0 / n;
-        int lowEnd = Math.max(2, (int) (250 / hzPerBin)), midEnd = Math.max(lowEnd + 1, (int) (4000 / hzPerBin));
-        AudioRecord mic = null;
         short[] pcm = new short[MIC_HOP];
         double[] ring = new double[MIC_N], re = new double[MIC_N], im = new double[MIC_N];
         double[] floor = new double[3], peak = {1, 1, 1}, env = new double[3];
         float[] hsv = new float[3];
         float turn = 0, hue = 0;
         double kickFast = 0, kickSlow = 0, flash = 0;
-        long lastKick = 0, lastSend = 0, heard = SystemClock.uptimeMillis();
+        long lastKick = 0, lastSend = 0;
         int sent = 0;
         while (listening) {
             double[] band = new double[3];
-            if (mic == null) SystemClock.sleep(40);
-            if (vis.getFft(fft) == Visualizer.SUCCESS) {
-                for (int k = 1; k < n / 2; k++) {
-                    double mag = Math.hypot(fft[2 * k], fft[2 * k + 1]);
-                    band[k < lowEnd ? 0 : k < midEnd ? 1 : 2] += mag * mag;
-                }
-            }
+            if (!micBands(mic, pcm, ring, re, im, band)) continue;
             long now = SystemClock.uptimeMillis();
-            boolean mixSilent = band[0] + band[1] + band[2] == 0;
-            if (!mixSilent) {
-                heard = now;
-                if (mic != null) {   // an app's PCM is back in the mix
-                    closeMic(mic);
-                    mic = null;
-                    java.util.Arrays.fill(floor, 0);
-                    java.util.Arrays.fill(peak, 1);
-                }
-            } else if (mic == null && now - heard > 1500) {
-                // Playing but nothing in the mix: a bitstream (an HDMI input's Dolby, say) goes straight to the
-                // soundbar. The microphone hears it instead.
-                mic = openMic();
-                if (mic == null) {
-                    heard = now;
-                    continue;
-                }
-                java.util.Arrays.fill(floor, 0);
-                java.util.Arrays.fill(peak, 1);
-            }
-            if (mic != null && !micBands(mic, pcm, ring, re, im, band)) continue;
             double[] level = new double[3];
             for (int b = 0; b < 3; b++) {
                 double e = Math.sqrt(band[b]);
@@ -347,8 +372,7 @@ final class Lights {
                 net.post(() -> send(colour(out, false)));
             }
         }
-        vis.release();
-        if (mic != null) closeMic(mic);
+        closeMic(mic);
         net.post(this::apply);   // back to the steady colour
     }
 
@@ -356,7 +380,8 @@ final class Lights {
 
     private static AudioRecord openMic() {
         try {
-            AudioRecord rec = new AudioRecord(MediaRecorder.AudioSource.MIC, MIC_RATE, AudioFormat.CHANNEL_IN_MONO,
+            // UNPROCESSED: the plain MIC source can make the TV lower its own output, as for a call.
+            AudioRecord rec = new AudioRecord(MediaRecorder.AudioSource.UNPROCESSED, MIC_RATE, AudioFormat.CHANNEL_IN_MONO,
                     AudioFormat.ENCODING_PCM_16BIT, Math.max(AudioRecord.getMinBufferSize(MIC_RATE,
                     AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT), MIC_HOP * 8));
             rec.startRecording();
@@ -446,17 +471,20 @@ final class Lights {
         }
     }
 
-    /** Looks for the controller now; done gets true when one answered. */
+    /** Looks for both kinds of controller now (Wi-Fi at once, Bluetooth for 6 s); done gets true when one answered. */
     void find(java.util.function.Consumer<Boolean> done) {
         net.post(() -> {
             String[] f = discover();
             if (f != null) {
                 prefs.edit().putString("ip", f[0]).putString("mac", f[1]).apply();
+                reachable = true;
                 closeSocket();
                 failedAt = 0;
                 apply();
             }
-            if (done != null) done.accept(f != null);
+            ble.scan(ok -> {
+                if (done != null) done.accept(f != null || ok);
+            });
         });
     }
 
