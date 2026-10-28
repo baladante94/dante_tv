@@ -284,7 +284,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
         grid.setItemAnimator(null);
         // Keep a few off-screen rows built so scrolling back up rebinds nothing.
         grid.setItemViewCacheSize(COLUMNS * 3);
-        grid.addItemDecoration(new DockDecoration(COLUMNS, density));
+        grid.addItemDecoration(new DockDecoration(COLUMNS, density, DockDecoration.style(this)));
         grid.addItemDecoration(new SectionDecoration(adapter(cfg), COLUMNS, density,
                 getResources().getFont(R.font.outfit_medium)));
         if (animations) {
@@ -1369,6 +1369,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
         final PopupWindow popup = glassPopup(panel, width);
 
         TvInputManager tim = (TvInputManager) getSystemService(TV_INPUT_SERVICE);
+        // Empty ports and the AV jacks fold behind a "More inputs" row (InputFold).
+        List<View> folded = new ArrayList<>();
         boolean sawNonHdmi = false;
         String tunerId = null;
         boolean tunerIsHw = false;
@@ -1437,7 +1439,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
                 if (hdmi && !label.toUpperCase(Locale.ROOT).contains("HDMI")) label = "HDMI " + label;
                 CharSequence custom = info.loadCustomLabel(this);
                 boolean named = custom != null && custom.length() > 0 && !custom.toString().equals(label);
-                if (!hdmi && rows.getChildCount() > 0 && !sawNonHdmi) addSeparator(rows);
+                if (!hdmi && rows.getChildCount() > 0 && !sawNonHdmi) fold(addSeparator(rows), folded);
                 if (!hdmi) sawNonHdmi = true;
                 List<TvInputInfo> devices = cecDevices.get(info.getId());
                 if (devices != null) {
@@ -1460,8 +1462,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
                 // Analog AV jacks have no hotplug detection, and some TVs report them as always connected
                 // (TCL Smart TV Pro G03 says "Connected" with nothing plugged in), so AV rows show no state.
                 int state = !hdmi || hdmiStateBogus ? -1 : tim.getInputState(id);
-                addInputRow(rows, popup, hdmi ? R.drawable.ic_input : R.drawable.ic_av, label, state,
+                View row = addInputRow(rows, popup, hdmi ? R.drawable.ic_input : R.drawable.ic_av, label, state,
                         () -> openInput(id));
+                if (InputFold.folds(hdmi, state)) fold(row, folded);
             }
         }
         // Nothing to list where there is no TvInputManager: the TV's own source panel switches inputs.
@@ -1490,13 +1493,37 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
             Toast.makeText(this, R.string.no_inputs, Toast.LENGTH_SHORT).show();
             return;
         }
+        if (!folded.isEmpty()) {
+            View more = addInputRow(rows, popup, R.drawable.ic_input, getString(R.string.more_inputs), -1, null);
+            more.setOnClickListener(v -> {
+                for (View f : folded) f.setVisibility(View.VISIBLE);
+                rows.removeView(more);
+                for (View f : folded) {
+                    if (f.isFocusable()) {
+                        f.requestFocus();
+                        break;
+                    }
+                }
+            });
+        }
 
         // Fit the widest row: TVs that report a status on every port (Sony) would otherwise squeeze the names out.
         panel.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
         popup.setWidth(Math.max(width, panel.getMeasuredWidth()));
 
         dropIn(popup, panel, anchor);
-        rows.getChildAt(0).requestFocus();
+        for (int i = 0; i < rows.getChildCount(); i++) {
+            View child = rows.getChildAt(i);
+            if (child.getVisibility() == View.VISIBLE && child.isFocusable()) {
+                child.requestFocus();
+                break;
+            }
+        }
+    }
+
+    private static void fold(View view, List<View> folded) {
+        view.setVisibility(View.GONE);
+        folded.add(view);
     }
 
     private PopupWindow glassPopup(View panel, int width) {
@@ -1523,16 +1550,17 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
                 .setInterpolator(new android.view.animation.DecelerateInterpolator(1.6f)).start();
     }
 
-    private void addSeparator(LinearLayout rows) {
+    private View addSeparator(LinearLayout rows) {
         View line = new View(this);
         line.setBackgroundColor(0x1FFFFFFF);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, (int) density);
         int m = (int) (6 * density), h = (int) (12 * density);
         lp.setMargins(h, m, h, m);
         rows.addView(line, lp);
+        return line;
     }
 
-    private void addInputRow(LinearLayout rows, PopupWindow popup, int iconRes, String title, int state, Runnable action) {
+    private View addInputRow(LinearLayout rows, PopupWindow popup, int iconRes, String title, int state, Runnable action) {
         View row = getLayoutInflater().inflate(R.layout.item_input, rows, false);
         ((ImageView) row.findViewById(R.id.icon)).setImageResource(iconRes);
         ((TextView) row.findViewById(R.id.title)).setText(title);
@@ -1550,11 +1578,14 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
             status.setVisibility(View.GONE);
             dot.setVisibility(View.GONE);
         }
-        row.setOnClickListener(v -> {
-            popup.dismiss();
-            action.run();
-        });
+        if (action != null) {
+            row.setOnClickListener(v -> {
+                popup.dismiss();
+                action.run();
+            });
+        }
         rows.addView(row);
+        return row;
     }
 
     // ---- Wi-Fi picker ------------------------------------------------------------------------------

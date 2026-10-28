@@ -60,6 +60,11 @@
             android:textSize="14sp" />
 
         <TextView
+            android:id="@+id/dockChoice"
+            style="@style/SettingsRow"
+            android:layout_marginTop="28dp" />
+
+        <TextView
             android:id="@+id/followThemeChoice"
             style="@style/SettingsRow"
             android:layout_marginTop="18dp"

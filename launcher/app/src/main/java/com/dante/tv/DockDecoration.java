@@ -9,8 +9,21 @@ import android.view.View;
 import androidx.annotation.NonNull;
 import androidx.recyclerview.widget.RecyclerView;
 
-/** Draws the tvOS style lighter band behind the first (dock) row and adds a gap below it. */
+/**
+ * Draws the tvOS style band behind the first (dock) row and adds a gap below it. Its look is chosen in Launcher
+ * settings: dark (the default), light frosted glass over the wallpaper, or none.
+ */
 public class DockDecoration extends RecyclerView.ItemDecoration {
+
+    static final String PREF = "dock_style";
+    static final int DARK = 0, LIGHT = 1, TRANSPARENT = 2;
+
+    static int style(android.content.Context ctx) {
+        int s = ctx.getSharedPreferences(Config.SETTINGS_NAME, android.content.Context.MODE_PRIVATE).getInt(PREF, DARK);
+        return s >= DARK && s <= TRANSPARENT ? s : DARK;
+    }
+
+    private final int style;
 
     private final int dockSize;
     private final float density;
@@ -18,13 +31,14 @@ public class DockDecoration extends RecyclerView.ItemDecoration {
     private final Paint edge = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final RectF rect = new RectF();
 
-    DockDecoration(int dockSize, float density) {
+    DockDecoration(int dockSize, float density, int style) {
         this.dockSize = dockSize;
         this.density = density;
-        band.setColor(0xFF141416);
+        this.style = style;
+        band.setColor(style == LIGHT ? 0x40FFFFFF : 0xFF141416);
         edge.setStyle(Paint.Style.STROKE);
         edge.setStrokeWidth(density);
-        edge.setColor(0x1FFFFFFF);
+        edge.setColor(style == LIGHT ? 0x59FFFFFF : 0x1FFFFFFF);
     }
 
     @Override
@@ -39,6 +53,7 @@ public class DockDecoration extends RecyclerView.ItemDecoration {
 
     @Override
     public void onDraw(@NonNull Canvas c, @NonNull RecyclerView parent, @NonNull RecyclerView.State state) {
+        if (style == TRANSPARENT) return;
         boolean any = false;
         for (int i = 0; i < parent.getChildCount(); i++) {
             View child = parent.getChildAt(i);

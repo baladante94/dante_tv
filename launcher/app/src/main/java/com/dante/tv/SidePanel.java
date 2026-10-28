@@ -197,6 +197,15 @@ final class SidePanel {
             ((TextView) opt.findViewById(R.id.sideStatus)).setText(optimizeResult[1]);
             optimizeResult = null;
         }
+        // An app may not restart the TV (REBOOT is a system permission); the key service opens the TV's own power
+        // menu instead, where the TV asks before it acts (CleanYourTV #1772).
+        if (ctx instanceof android.accessibilityservice.AccessibilityService) {
+            addRow(R.drawable.ic_power, ctx.getString(R.string.side_restart), null, v -> {
+                close();
+                ((android.accessibilityservice.AccessibilityService) ctx)
+                        .performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_POWER_DIALOG);
+            });
+        }
         addRow(R.drawable.ic_settings, ctx.getString(R.string.side_all_settings), null, v -> go(new Intent(Settings.ACTION_SETTINGS)));
         focusRow(focus);
     }
@@ -630,6 +639,9 @@ final class SidePanel {
             if (tim.getInputState(info.getId()) == TvInputManager.INPUT_STATE_CONNECTED) plugged++;
         }
         boolean stateBogus = ports > 1 && plugged == ports;
+        java.util.Set<String> ids = new java.util.HashSet<>();
+        for (TvInputInfo info : inputs) ids.add(info.getId());
+        List<View> folded = new ArrayList<>();
         String tunerId = null;
         for (TvInputInfo info : inputs) {
             if (info.getType() == TvInputInfo.TYPE_TUNER && tunerId == null
@@ -646,8 +658,14 @@ final class SidePanel {
             int state = hdmi && stateBogus ? -1 : tim.getInputState(info.getId());
             String status = state == TvInputManager.INPUT_STATE_CONNECTED ? ctx.getString(R.string.connected) : null;
             String id = info.getId();
-            addRow(hdmi ? R.drawable.ic_input : R.drawable.ic_av, label, status,
+            View row = addRow(hdmi ? R.drawable.ic_input : R.drawable.ic_av, label, status,
                     v -> go(channel(TvContract.buildChannelUriForPassthroughInput(id))));
+            // A named HDMI-CEC device (its input sits under its port) stays even asleep; empty ports and AV fold.
+            boolean device = info.getParentId() != null && ids.contains(info.getParentId());
+            if (!device && InputFold.folds(hdmi, hdmi && stateBogus ? -1 : state)) {
+                row.setVisibility(View.GONE);
+                folded.add(row);
+            }
         }
         if (tunerId != null) {
             Intent live = channel(TvContract.buildChannelUriForPassthroughInput(tunerId));
@@ -660,7 +678,20 @@ final class SidePanel {
             go(new Intent("com.android.tv.action.VIEW_INPUTS"));
             return;
         }
-        focusRow(0);
+        if (!folded.isEmpty()) {
+            View more = addRow(R.drawable.ic_input, ctx.getString(R.string.more_inputs), null, null);
+            more.setOnClickListener(v -> {
+                for (View f : folded) f.setVisibility(View.VISIBLE);
+                rows.removeView(more);
+                folded.get(0).requestFocus();
+            });
+        }
+        for (int i = 0; i < rows.getChildCount(); i++) {
+            if (rows.getChildAt(i).getVisibility() == View.VISIBLE) {
+                focusRow(i);
+                break;
+            }
+        }
     }
 
     private static Intent channel(Uri uri) {

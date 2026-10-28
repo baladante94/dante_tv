@@ -463,6 +463,7 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         h.banner.setTranslationY(0f);
         h.glint.animate().cancel();
         h.glint.setAlpha(0f);
+        h.ring.set(focused);
         // A fully opaque banner covers the whole card (centerCrop), so the card's own fill under it is drawn for
         // nothing on every frame; keep it under banners with transparent parts and under icon tiles.
         h.card.setBackground(e.banner != null && e.banner.getOpacity() == PixelFormat.OPAQUE ? null : h.cardBackground);
@@ -632,6 +633,7 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         final TextView label;
         final TextView name;
         final View glint;
+        final FocusRing ring;
         final boolean animations;
         final boolean advancedEffects;
         final boolean reducedMotion;
@@ -651,6 +653,8 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
             this.reducedMotion = reducedMotion;
 
             final float density = v.getResources().getDisplayMetrics().density;
+            ring = new FocusRing(density);
+            card.setForeground(ring);
             card.setOutlineProvider(new ViewOutlineProvider() {
                 @Override
                 public void getOutline(View view, Outline outline) {
@@ -676,6 +680,8 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
                 name.animate().cancel();
                 int move = focused ? pendingMove : 0;
                 if (focused) pendingMove = 0;
+                if (focused) ring.show(move, animations && !reducedMotion);
+                else ring.hide();
                 float scale = !animations ? 1f : advancedEffects ? 1.12f : 1.10f;
                 float s = focused ? scale : 1f;
                 if (!animations) {

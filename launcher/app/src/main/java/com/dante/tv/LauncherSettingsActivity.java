@@ -17,6 +17,7 @@ public final class LauncherSettingsActivity extends Activity {
     private TextView animationsChoice;
     private TextView advancedChoice;
     private TextView followThemeChoice;
+    private TextView dockChoice;
     private int columns;
     private boolean animations;
     private boolean advancedEffects;
@@ -64,6 +65,13 @@ public final class LauncherSettingsActivity extends Activity {
                         .setNegativeButton(android.R.string.cancel, null)
                         .show();
             }
+        });
+        dockChoice = findViewById(R.id.dockChoice);
+        dockChoice.setOnClickListener(v -> {
+            int next = (DockDecoration.style(this) + 1) % 3;
+            choices.edit().putInt(DockDecoration.PREF, next).apply();
+            changed();
+            refresh();
         });
         followThemeChoice = findViewById(R.id.followThemeChoice);
         followThemeChoice.setOnClickListener(v -> {
@@ -115,6 +123,8 @@ public final class LauncherSettingsActivity extends Activity {
         advancedChoice.setEnabled(animations);
         advancedChoice.setAlpha(animations ? 1f : 0.5f);
         followThemeChoice.setSelected(!hasOnTvChoices());
+        int[] names = {R.string.dock_dark, R.string.dock_light, R.string.dock_transparent};
+        dockChoice.setText(getString(R.string.dock_state, getString(names[DockDecoration.style(this)])));
     }
 
     private boolean hasOnTvChoices() {

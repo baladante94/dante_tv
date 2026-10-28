@@ -110,6 +110,12 @@
     <string name="side_picture">Picture</string>
     <string name="side_sound">Sound</string>
     <string name="side_all_settings">All settings</string>
+    <string name="side_restart">Restart…</string>
+    <string name="dock_state">Dock background: %1$s</string>
+    <string name="dock_dark">Dark</string>
+    <string name="dock_light">Light</string>
+    <string name="dock_transparent">Transparent</string>
+    <string name="more_inputs">More inputs</string>
     <string name="memc_note_last">Shows the last value set here. The TV keeps MEMC per picture mode, and a full power-off can reset it.</string>
     <string name="memc_changing">Changing MEMC to %1$s…</string>
     <string name="memc_failed">Couldn\'t change MEMC. Opening Picture settings.</string>

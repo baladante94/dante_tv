@@ -23,9 +23,44 @@ public class InputKeyService extends AccessibilityService {
     private java.util.Set<String> otherHomes;
     private final android.os.Handler handler = new android.os.Handler(android.os.Looper.getMainLooper());
 
+    /**
+     * Home at every power-on (CleanYourTV's power_on_home_always): this Philips wakes on its last source, an HDMI
+     * input or an app. Shortly after the screen comes on Dante TV is brought to the front, unless a key was pressed
+     * meanwhile (someone already has the TV) or an HDMI device is awake: a Fire TV woken by its own remote turns
+     * the TV on over HDMI-CEC and should keep the screen.
+     */
+    private static final long POWER_ON_DELAY_MS = 800, POWER_ON_WINDOW_MS = 4000;
+    private long powerOnUntil;
+
     @Override
     protected void onServiceConnected() {
         Lights.get(this).start();
+        registerReceiver(new android.content.BroadcastReceiver() {
+            @Override
+            public void onReceive(android.content.Context c, Intent i) {
+                powerOnUntil = android.os.SystemClock.uptimeMillis() + POWER_ON_WINDOW_MS;
+                handler.postDelayed(InputKeyService.this::homeAtPowerOn, POWER_ON_DELAY_MS);
+            }
+        }, new android.content.IntentFilter(Intent.ACTION_SCREEN_ON));
+    }
+
+    private void homeAtPowerOn() {
+        if (android.os.SystemClock.uptimeMillis() > powerOnUntil || getPackageName().equals(foreground)) return;
+        if (hdmiDeviceAwake()) return;
+        HomeGuard.openHome(this, false);
+    }
+
+    /** An HDMI-CEC device (it has an input of its own under its port) that reports itself on, not in standby. */
+    private boolean hdmiDeviceAwake() {
+        android.media.tv.TvInputManager tim = (android.media.tv.TvInputManager) getSystemService(TV_INPUT_SERVICE);
+        if (tim == null) return false;
+        for (android.media.tv.TvInputInfo info : tim.getTvInputList()) {
+            if (info.getParentId() != null && info.getType() == android.media.tv.TvInputInfo.TYPE_HDMI
+                    && tim.getInputState(info.getId()) == android.media.tv.TvInputManager.INPUT_STATE_CONNECTED) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @Override
@@ -34,6 +69,9 @@ public class InputKeyService extends AccessibilityService {
         // drew the original one is disabled). This Philips/Skyworth remote sends it as KEYCODE_NOTIFICATION (83,
         // scancode 240), as TCL Google TV remotes do; standard remotes send KEYCODE_SETTINGS.
         int code = event.getKeyCode();
+        if (code != KeyEvent.KEYCODE_POWER && code != KeyEvent.KEYCODE_TV_POWER && code != KeyEvent.KEYCODE_WAKEUP) {
+            powerOnUntil = 0;   // the remote is in use: leave the screen as it is
+        }
         TitleFollowUp.onKey(this, event, foreground);
         if (code == KeyEvent.KEYCODE_HOME) {
             if (panel != null && panel.isOpen()) panel.close();
