@@ -21,7 +21,7 @@
         android:paddingStart="22dp"
         android:paddingEnd="26dp"
         android:paddingTop="26dp"
-        android:clipChildren="false"
+        android:clipChildren="true"
         android:clipToPadding="false">
 
         <TextClock
@@ -47,8 +47,9 @@
             android:textAllCaps="true"
             android:fontFamily="@font/outfit_medium" />
 
-        <!-- Scrolls only if a TV's screen is too short for every row. The list clips to its own box so scrolled
-             rows never draw over the clock and title; the padding inside it leaves room for the focus zoom. -->
+        <!-- Scrolls only if a TV's screen is too short for every row. The panel clips the list to its own box
+             (a child is only cut at its edge when its parent clips), so scrolled rows never draw over the clock
+             and title; the padding inside it leaves room for the focus zoom. -->
         <ScrollView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

@@ -11,6 +11,8 @@ import android.content.res.Resources;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.ColorMatrix;
+import android.graphics.ColorMatrixColorFilter;
 import android.graphics.Outline;
 import android.graphics.PixelFormat;
 import android.graphics.Rect;
@@ -165,6 +167,8 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
     private final boolean reducedMotion;
     /** Launcher settings, App icons: banners turned into white logos (BannerLogo). */
     private final boolean whiteLogos;
+    /** With white logos, whatever can't be keyed to a logo (picture banners, plain icons) shows in black and white. */
+    private final ColorMatrixColorFilter mono;
     private final List<Entry> items = new ArrayList<>();
     private static final String ORDER = "app_order";
     /** The owner's own order (Move), as tile keys; empty until they first move a tile. The dock is its first row. */
@@ -186,6 +190,9 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         this.showHomeSettings = cfg.showHomeSettingsShortcut;
         this.reducedMotion = cfg.reducedMotion;
         this.whiteLogos = ctx.getSharedPreferences(Config.SETTINGS_NAME, Context.MODE_PRIVATE).getBoolean("white_logos", false);
+        ColorMatrix grey = new ColorMatrix();
+        grey.setSaturation(0);
+        mono = whiteLogos ? new ColorMatrixColorFilter(grey) : null;
         // Tiles keep their identity across reload(), so a focused tile stays on its app instead of
         // its view being rebound to whatever app now sits in that slot.
         setHasStableIds(true);
@@ -471,6 +478,8 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         // nothing on every frame; keep it under banners with transparent parts and under icon tiles.
         Drawable banner = e.banner != null && whiteLogos ? BannerLogo.of(ctx.getResources(), e.key, e.banner) : e.banner;
         h.card.setBackground(banner != null && banner.getOpacity() == PixelFormat.OPAQUE ? null : h.cardBackground);
+        h.banner.setColorFilter(mono);
+        h.icon.setColorFilter(mono);
         if (banner != null) {
             h.banner.setImageDrawable(banner);
             h.banner.setVisibility(View.VISIBLE);

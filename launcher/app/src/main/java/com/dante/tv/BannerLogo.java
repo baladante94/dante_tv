@@ -13,7 +13,8 @@ import java.util.Map;
 /**
  * A banner as a white logo on the dark tile (Launcher settings: App icons, White logos). The banner's background is
  * the colour along its edges; whatever stands out from it is the logo, kept as white with that much opacity. A banner
- * that is mostly picture (a poster, a photo) has no clean logo to take, and stays as it is. Worked out once per app.
+ * on a gradient or picture gives its near-white lettering instead; one with neither stays as it is (shown in black
+ * and white). Worked out once per app.
  */
 final class BannerLogo {
 
@@ -46,6 +47,7 @@ final class BannerLogo {
         src.recycle();
         int bg = edgeColour(px, w, h);
         int br = Color.red(bg), bgG = Color.green(bg), bb = Color.blue(bg);
+        int[] orig = px.clone();
         int covered = 0;
         for (int i = 0; i < px.length; i++) {
             int p = px[i];
@@ -57,7 +59,19 @@ final class BannerLogo {
             px[i] = (alpha << 24) | 0xFFFFFF;
         }
         float share = covered / (float) px.length;
-        if (share < 0.01f || share > 0.55f) return null;   // nothing, or mostly picture: no logo to take
+        if (share < 0.01f || share > 0.55f) {
+            // No even background (a gradient or a picture): the near-white lettering on it is the logo, if any.
+            covered = 0;
+            for (int i = 0; i < px.length; i++) {
+                int p = orig[i];
+                int lo = Color.alpha(p) < 128 ? 0 : Math.min(Color.red(p), Math.min(Color.green(p), Color.blue(p)));
+                int alpha = Math.max(0, Math.min(255, (lo - 170) * 4));
+                if (alpha > 128) covered++;
+                px[i] = (alpha << 24) | 0xFFFFFF;
+            }
+            share = covered / (float) px.length;
+            if (share < 0.01f || share > 0.4f) return null;
+        }
         Bitmap out = Bitmap.createBitmap(px, w, h, Bitmap.Config.ARGB_8888);
         return new BitmapDrawable(res, out);
     }
