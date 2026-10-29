@@ -163,6 +163,8 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
     private final boolean showHomeSettings;
     /** Calmer motion for weak GPUs (config.xml, reduced_motion): no overshoot, shorter fades. */
     private final boolean reducedMotion;
+    /** Launcher settings, App icons: banners turned into white logos (BannerLogo). */
+    private final boolean whiteLogos;
     private final List<Entry> items = new ArrayList<>();
     private static final String ORDER = "app_order";
     /** The owner's own order (Move), as tile keys; empty until they first move a tile. The dock is its first row. */
@@ -183,6 +185,7 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         this.advancedEffects = cfg.animations && cfg.advancedEffects;
         this.showHomeSettings = cfg.showHomeSettingsShortcut;
         this.reducedMotion = cfg.reducedMotion;
+        this.whiteLogos = ctx.getSharedPreferences(Config.SETTINGS_NAME, Context.MODE_PRIVATE).getBoolean("white_logos", false);
         // Tiles keep their identity across reload(), so a focused tile stays on its app instead of
         // its view being rebound to whatever app now sits in that slot.
         setHasStableIds(true);
@@ -466,9 +469,10 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         h.ring.set(focused);
         // A fully opaque banner covers the whole card (centerCrop), so the card's own fill under it is drawn for
         // nothing on every frame; keep it under banners with transparent parts and under icon tiles.
-        h.card.setBackground(e.banner != null && e.banner.getOpacity() == PixelFormat.OPAQUE ? null : h.cardBackground);
-        if (e.banner != null) {
-            h.banner.setImageDrawable(e.banner);
+        Drawable banner = e.banner != null && whiteLogos ? BannerLogo.of(ctx.getResources(), e.key, e.banner) : e.banner;
+        h.card.setBackground(banner != null && banner.getOpacity() == PixelFormat.OPAQUE ? null : h.cardBackground);
+        if (banner != null) {
+            h.banner.setImageDrawable(banner);
             h.banner.setVisibility(View.VISIBLE);
             h.icon.setVisibility(View.GONE);
             h.label.setVisibility(View.GONE);

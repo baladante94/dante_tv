@@ -69,13 +69,18 @@ final class Config {
     final boolean overlayApplied;
     /** Living eyes painted out of the wallpaper (EyesView), or null: a theme's config.json "eyes". */
     final org.json.JSONArray eyes;
+    /** Rain falling over a wallpaper painted in the rain (RainView), or null: a picked wall's json "rain". */
+    final JSONObject rain;
+    /** Lightning behind the figure (LightningView), or null: a picked wall's json "lightning". */
+    final JSONObject lightning;
 
     private Config(List<String> dockApps, List<String> hiddenApps, String liveTvPackage, String liveTvAction,
                    String sourcePanelService, String sourcePanelAction, String inputAction,
                    int columns, int rowsBelowDock, boolean animations, boolean advancedEffects,
                    boolean shamsiDate, boolean moduleCards, boolean reducedMotion, String vpnApp,
                    boolean showHomeSettingsShortcut, int backgroundColor, int skyIntensity,
-                   File wallpaper, String tmdbToken, String region, boolean overlayApplied, org.json.JSONArray eyes) {
+                   File wallpaper, String tmdbToken, String region, boolean overlayApplied, org.json.JSONArray eyes,
+                   JSONObject rain, JSONObject lightning) {
         this.dockApps = Collections.unmodifiableList(dockApps);
         this.hiddenApps = Collections.unmodifiableList(hiddenApps);
         this.liveTvPackage = liveTvPackage;
@@ -99,6 +104,8 @@ final class Config {
         this.region = region;
         this.overlayApplied = overlayApplied;
         this.eyes = eyes;
+        this.rain = rain;
+        this.lightning = lightning;
     }
 
     /** The folder the theme tools push into; null when external storage is unavailable. */
@@ -175,10 +182,14 @@ final class Config {
         // eyes and a sky intensity (0 shows the picture untinted).
         String pick = choices.getString(WALLPAPER_PICK, "");
         File picked = pick.isEmpty() ? null : wallFile(ctx, pick);
+        JSONObject rain = wallpaper != null && json != null ? json.optJSONObject("rain") : null;
+        JSONObject lightning = wallpaper != null && json != null ? json.optJSONObject("lightning") : null;
         if (picked != null) {
             wallpaper = picked;
             JSONObject meta = read(new File(picked.getParentFile(), pick + ".json"));
             eyes = meta != null ? meta.optJSONArray("eyes") : null;
+            rain = meta != null ? meta.optJSONObject("rain") : null;
+            lightning = meta != null ? meta.optJSONObject("lightning") : null;
             if (meta != null) skyIntensity = integer(meta, "sky_intensity", skyIntensity, 0, 100);
         }
 
@@ -186,12 +197,15 @@ final class Config {
                 Math.max(1, columns), Math.max(0, rowsBelow), animations, advancedEffects,
                 shamsi, moduleCards, reducedMotion, vpn, homeSettings, background,
                 Math.max(0, Math.min(100, skyIntensity)), wallpaper, tmdbToken, region, applied,
-                eyes);
+                eyes, rain, lightning);
     }
 
     static final String WALLPAPER_PICK = "wallpaper_pick";
 
-    /** Wallpapers to choose from in Launcher settings: walls/<name>.jpg (or .png) in the theme folder, by name. */
+    /**
+     * Wallpapers to choose from in Launcher settings: walls/<name>.jpg (or .png) in the theme folder, by name. Eye
+     * sprites and hair overlays (<name>-eyeN.png, <name>-overN.png) sit beside them and are not wallpapers.
+     */
     static List<String> walls(Context ctx) {
         List<String> names = new ArrayList<>();
         File dir = dir(ctx);
@@ -205,6 +219,7 @@ final class Config {
             int dot = n.lastIndexOf('.');
             if (dot <= 0 || !f.isFile() || f.length() == 0) continue;
             String ext = n.substring(dot + 1).toLowerCase(java.util.Locale.ROOT);
+            if (n.substring(0, dot).matches(".*-(eye|over)\\d+")) continue;
             if (ext.equals("jpg") || ext.equals("jpeg") || ext.equals("png")) names.add(n.substring(0, dot));
         }
         Collections.sort(names, String.CASE_INSENSITIVE_ORDER);

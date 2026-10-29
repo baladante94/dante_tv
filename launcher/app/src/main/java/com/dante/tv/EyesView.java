@@ -34,18 +34,26 @@ final class EyesView extends View {
         float ix, iy, ir;
         String style;
         int lid, color, sclera;
-        boolean fillSocket;
+        boolean fillSocket, hasColor;
         // A sprite iris: the artwork's own iris, cut out (file beside the wallpaper), and its half size.
         android.graphics.Bitmap sprite;
         float spriteR;
         final RectF spriteRect = new RectF();
         float range = 1f;
+        boolean spins;
+        // A soft glow around the iris (its colour, alpha 0 for none), drawn over the eye white and the skin near it.
+        int glow;
+        Paint glowPaint, hairLit;
+        // Hair or lashes in front of the eye, cut from the artwork: drawn over the iris and the lid, at over_box.
+        android.graphics.Bitmap over;
+        float[] overBox;
+        final RectF overRect = new RectF();
         final Path path = new Path();
         final RectF bounds = new RectF();
         float cx, cy, r;
         // The eye's own axis (it may slant), the opening's extent along and across it from the iris centre,
         // and how far the iris may travel each way.
-        float ux, uy, angle, alongMin, alongMax, acrossMin, acrossMax, maxAlong, maxAcross;
+        float ux, uy, angle, alongMin, alongMax, acrossMin, acrossMax, maxBack, maxAlong, maxAcross;
         Paint iris;
     }
 
@@ -82,11 +90,21 @@ final class EyesView extends View {
             e.sclera = parse(o.optString("sclera"), 0xFF000000);
             // fill: paint the whole opening in the socket colour first, so no trace of the painted-out iris shows.
             e.fillSocket = o.optBoolean("fill", false);
-            e.range = (float) Math.max(0, Math.min(1, o.optDouble("range", 1)));
+            e.range = (float) Math.max(0, Math.min(2, o.optDouble("range", 1)));
+            e.glow = o.has("glow") ? parse(o.optString("glow"), 0) : 0;
+            e.hasColor = o.has("color");
+            e.spins = o.optBoolean("spin", "sharingan".equals(e.style));
             String sprite = o.optString("sprite", "");
             if (!sprite.isEmpty() && dir != null && !sprite.contains("/")) {
                 e.sprite = android.graphics.BitmapFactory.decodeFile(new java.io.File(dir, sprite).getPath());
                 e.spriteR = (float) o.optDouble("sprite_r", e.ir);
+            }
+            String over = o.optString("over", "");
+            JSONArray box = o.optJSONArray("over_box");
+            if (!over.isEmpty() && box != null && box.length() == 4 && dir != null && !over.contains("/")) {
+                e.over = android.graphics.BitmapFactory.decodeFile(new java.io.File(dir, over).getPath());
+                e.overBox = new float[]{(float) box.optDouble(0), (float) box.optDouble(1),
+                        (float) box.optDouble(2), (float) box.optDouble(3)};
             }
             eyes.add(e);
         }
@@ -131,13 +149,26 @@ final class EyesView extends View {
             axis(e, ox, oy, pw, ph);
             float sr = e.spriteR * e.r / Math.max(1e-6f, e.ir);
             e.spriteRect.set(-sr, -sr, sr, sr);
-            // How far the iris may glance: along the eye, keeping most of it in view; a little across.
-            e.maxAlong = Math.max(0f, Math.min(-e.alongMin, e.alongMax) - e.r * 0.75f) * e.range;
+            // How far the iris may glance each way along the eye, keeping a good part of it in view; a little across.
+            e.maxBack = Math.max(0f, -e.alongMin - e.r * 0.75f) * Math.min(1f, e.range);
+            e.maxAlong = Math.max(0f, e.alongMax - e.r * 0.75f) * Math.min(1f, e.range);
             e.maxAcross = e.r * 0.22f * e.range;
+            if (e.overBox != null) {
+                e.overRect.set(ox + e.overBox[0] * pw, oy + e.overBox[1] * ph, ox + e.overBox[2] * pw, oy + e.overBox[3] * ph);
+            }
+            if (Color.alpha(e.glow) > 0) {
+                e.glowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+                e.glowPaint.setShader(new RadialGradient(0, 0, e.r * 2.4f, new int[]{e.glow, e.glow & 0x00FFFFFF},
+                        new float[]{0.3f, 1f}, Shader.TileMode.CLAMP));
+                // The same light on the hair in front: only where there is hair (drawn atop it in its own layer).
+                e.hairLit = new Paint(e.glowPaint);
+                e.hairLit.setXfermode(new android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.SRC_ATOP));
+            }
             e.iris = new Paint(Paint.ANTI_ALIAS_FLAG);
             if ("sharingan".equals(e.style)) {
-                e.iris.setShader(new RadialGradient(0, 0, e.r, new int[]{0xFF7A0A12, 0xFFD3202E, 0xFFFF4B55},
-                        new float[]{0f, 0.45f, 1f}, Shader.TileMode.CLAMP));
+                int[] tones = e.hasColor ? new int[]{mix(e.color, 0.55f), e.color, lighten(e.color)}
+                        : new int[]{0xFF7A0A12, 0xFFD3202E, 0xFFFF4B55};
+                e.iris.setShader(new RadialGradient(0, 0, e.r, tones, new float[]{0f, 0.45f, 1f}, Shader.TileMode.CLAMP));
             } else if ("slit".equals(e.style)) {
                 // A glowing iris: hot near the centre, the theme colour, darker at the rim.
                 e.iris.setShader(new RadialGradient(0, 0, e.r, new int[]{0xFFFFD2B8, e.color, mix(e.color, 0.45f)},
@@ -186,12 +217,36 @@ final class EyesView extends View {
 
     // ---- behaviour ---------------------------------------------------------------------------------
 
+    /** When Home last went away, process-wide: a first start (boot) or a long absence (standby) wakes the eyes. */
+    private static long awaySince = -1;
+    private static final long WAKE_AFTER_MS = 5 * 60_000;
+    private float wake = 1f;
+    private ValueAnimator wakeAnim;
+
     /** Home in front: blink on a timer. Away: no timers, no frames. */
     void setActive(boolean on) {
         if (active == on) return;
         active = on;
         removeCallbacks(blinkSoon);
-        if (on) scheduleBlink();
+        long now = SystemClock.elapsedRealtime();
+        if (on) {
+            scheduleBlink();
+            if (awaySince < 0 || now - awaySince > WAKE_AFTER_MS) postDelayed(this::wakeUp, 300);
+        } else {
+            awaySince = now;
+        }
+    }
+
+    /** The Sharingan activates: each spinning eye grows into place turning twice, about 1.4 s. */
+    private void wakeUp() {
+        if (wakeAnim != null) wakeAnim.cancel();
+        wakeAnim = ValueAnimator.ofFloat(0f, 1f).setDuration(1400);
+        wakeAnim.setInterpolator(new DecelerateInterpolator(2.2f));
+        wakeAnim.addUpdateListener(a -> {
+            wake = (float) a.getAnimatedValue();
+            invalidate();
+        });
+        wakeAnim.start();
     }
 
     /** Glance toward a point on screen (a focused tile's centre). */
@@ -260,14 +315,26 @@ final class EyesView extends View {
     protected void onDraw(Canvas canvas) {
         for (Eye e : eyes) {
             if (e.iris == null) continue;
+            // The glance, turned into the eye's own frame: along its axis, and a little across it.
+            float g = gx * e.ux + gy * e.uy;
+            float along = g * (g < 0 ? e.maxBack : e.maxAlong), across = (-gx * e.uy + gy * e.ux) * e.maxAcross;
+            float x = e.cx + along * e.ux - across * e.uy, y = e.cy + along * e.uy + across * e.ux;
+            if (e.glowPaint != null && lid < 0.5f) {
+                canvas.save();
+                canvas.translate(x, y);
+                canvas.drawCircle(0, 0, e.r * 2.4f, e.glowPaint);
+                canvas.restore();
+            }
             canvas.save();
             canvas.clipPath(e.path);
             if (e.fillSocket) canvas.drawColor(e.sclera);
-            // The glance, turned into the eye's own frame: along its axis, and a little across it.
-            float along = (gx * e.ux + gy * e.uy) * e.maxAlong, across = (-gx * e.uy + gy * e.ux) * e.maxAcross;
-            float x = e.cx + along * e.ux - across * e.uy, y = e.cy + along * e.uy + across * e.ux;
             canvas.save();
             canvas.translate(x, y);
+            if (e.spins && wake < 1f) {
+                float grow = 0.65f + 0.35f * Math.min(1f, wake * 2.5f);
+                canvas.scale(grow, grow);
+                canvas.rotate(720f * wake - 720f);   // ends upright: two full turns into place
+            }
             if (e.sprite != null) {
                 canvas.drawBitmap(e.sprite, null, e.spriteRect, spritePaint);
             } else if ("sharingan".equals(e.style)) {
@@ -301,6 +368,15 @@ final class EyesView extends View {
                 canvas.restore();
             }
             canvas.restore();
+            if (e.over != null) {
+                int layer = canvas.saveLayer(e.overRect, null);
+                canvas.drawBitmap(e.over, null, e.overRect, spritePaint);
+                if (e.hairLit != null && lid < 0.5f) {
+                    canvas.translate(x, y);
+                    canvas.drawCircle(0, 0, e.r * 2.4f, e.hairLit);
+                }
+                canvas.restoreToCount(layer);
+            }
         }
     }
 

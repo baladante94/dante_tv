@@ -75,6 +75,16 @@
             android:layout_marginTop="10dp" />
 
         <TextView
+            android:id="@+id/logoChoice"
+            style="@style/SettingsRow"
+            android:layout_marginTop="10dp" />
+
+        <TextView
+            android:id="@+id/secondsChoice"
+            style="@style/SettingsRow"
+            android:layout_marginTop="10dp" />
+
+        <TextView
             android:id="@+id/followThemeChoice"
             style="@style/SettingsRow"
             android:layout_marginTop="18dp"

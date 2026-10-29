@@ -20,6 +20,8 @@ public final class LauncherSettingsActivity extends Activity {
     private TextView dockChoice;
     private TextView shelfChoice;
     private TextView wallChoice;
+    private TextView logoChoice;
+    private TextView secondsChoice;
     private int columns;
     private boolean animations;
     private boolean advancedEffects;
@@ -91,6 +93,10 @@ public final class LauncherSettingsActivity extends Activity {
             changed();
             refresh();
         });
+        logoChoice = findViewById(R.id.logoChoice);
+        logoChoice.setOnClickListener(v -> toggle("white_logos"));
+        secondsChoice = findViewById(R.id.secondsChoice);
+        secondsChoice.setOnClickListener(v -> toggle("clock_seconds"));
         followThemeChoice = findViewById(R.id.followThemeChoice);
         followThemeChoice.setOnClickListener(v -> {
             if (!hasOnTvChoices()) return;
@@ -110,6 +116,12 @@ public final class LauncherSettingsActivity extends Activity {
                 open(new Intent(Settings.ACTION_SETTINGS)));
         refresh();
         columnChoices[Math.max(0, Math.min(columns - 4, 3))].requestFocus();
+    }
+
+    private void toggle(String key) {
+        choices.edit().putBoolean(key, !choices.getBoolean(key, false)).apply();
+        changed();
+        refresh();
     }
 
     /**
@@ -147,6 +159,10 @@ public final class LauncherSettingsActivity extends Activity {
         if (!Config.walls(this).contains(wall)) wall = "";
         wallChoice.setText(getString(R.string.wall_state, wall.isEmpty() ? getString(R.string.wall_default)
                 : Character.toUpperCase(wall.charAt(0)) + wall.substring(1).replace('-', ' ')));
+        logoChoice.setText(getString(R.string.logo_state, getString(choices.getBoolean("white_logos", false)
+                ? R.string.logo_white : R.string.logo_banners)));
+        secondsChoice.setText(getString(R.string.seconds_state,
+                getString(choices.getBoolean("clock_seconds", false) ? R.string.on : R.string.off)));
         shelfChoice.setText(getString(R.string.shelf_state,
                 getString(choices.getBoolean("top_shelf", true) ? R.string.on : R.string.off)));
     }

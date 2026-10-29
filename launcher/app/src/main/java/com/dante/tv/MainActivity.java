@@ -250,11 +250,25 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
         getWindow().setBackgroundDrawable(null);
         if (safeMode || cfg.wallpaper == null || !showWallpaper(cfg.wallpaper)) {
             root.setBackgroundColor(cfg.backgroundColor);
-        } else if (cfg.eyes != null && cfg.eyes.length() > 0) {
-            // Living eyes: drawn over the wallpaper, under everything else.
-            eyesView = new EyesView(this, cfg.eyes, wallAspect, cfg.wallpaper.getParentFile());
-            root.addView(eyesView, 1, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.MATCH_PARENT));
+        } else {
+            if (cfg.lightning != null) {
+                // Behind the eyes and everything else, just over the wallpaper.
+                lightningView = new LightningView(this, cfg.lightning, wallAspect, cfg.wallpaper.getParentFile());
+                root.addView(lightningView, 1, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT));
+            }
+            int over = lightningView != null ? 2 : 1;
+            if (cfg.eyes != null && cfg.eyes.length() > 0) {
+                // Living eyes: drawn over the wallpaper, under everything else.
+                eyesView = new EyesView(this, cfg.eyes, wallAspect, cfg.wallpaper.getParentFile());
+                root.addView(eyesView, over++, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT));
+            }
+            if (cfg.rain != null) {
+                rainView = new RainView(this, cfg.rain);
+                root.addView(rainView, over, new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            }
         }
         sky = findViewById(R.id.sky);
         sky.setIntensity(safeMode ? 0 : cfg.skyIntensity);
@@ -267,6 +281,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
         wifiLabel = findViewById(R.id.wifiLabel);
         wifiIcon = findViewById(R.id.wifiIcon);
         clockBlock = findViewById(R.id.clockBlock);
+        if (getSharedPreferences(Config.SETTINGS_NAME, MODE_PRIVATE).getBoolean("clock_seconds", false)) {
+            // Launcher settings, Clock seconds: the rolling clock stands in for the plain one.
+            android.widget.TextClock plain = findViewById(R.id.clock);
+            ViewGroup row = (ViewGroup) plain.getParent();
+            row.addView(new RollingClock(this, plain.getTypeface()), row.indexOfChild(plain));
+            plain.setVisibility(View.GONE);
+        }
         shamsiDate = findViewById(R.id.shamsiDate);
         shamsi = cfg.shamsiDate;
         if (shamsi) {
@@ -384,6 +405,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
     private android.graphics.Bitmap wallSmall;
     private float wallAspect = 16f / 9f;
     private EyesView eyesView;
+    private RainView rainView;
+    private LightningView lightningView;
 
     private boolean showWallpaper(File file) {
         try {
@@ -461,6 +484,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
         super.onStart();
         stopped = false;
         if (eyesView != null) eyesView.setActive(true);
+        if (rainView != null) rainView.setActive(true);
+        if (lightningView != null) lightningView.setActive(true);
         if (grid.getAdapter() == null) grid.setAdapter(adapter);   // dropped by onTrimMemory
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(timeReceiver, timeFilter, Context.RECEIVER_NOT_EXPORTED);
@@ -640,6 +665,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
     protected void onStop() {
         super.onStop();
         if (eyesView != null) eyesView.setActive(false);
+        if (rainView != null) rainView.setActive(false);
+        if (lightningView != null) lightningView.setActive(false);
         unregisterReceiver(timeReceiver);
         handler.removeCallbacks(clockCheck);
         stopped = true;

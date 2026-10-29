@@ -115,6 +115,10 @@
     <string name="shelf_state">Top Shelf: %1$s</string>
     <string name="wall_state">Wallpaper: %1$s</string>
     <string name="wall_default">Theme default</string>
+    <string name="logo_state">App icons: %1$s</string>
+    <string name="logo_banners">Banners</string>
+    <string name="logo_white">White logos</string>
+    <string name="seconds_state">Clock seconds: %1$s</string>
     <string name="dock_dark">Dark</string>
     <string name="dock_light">Light</string>
     <string name="dock_transparent">Transparent</string>
