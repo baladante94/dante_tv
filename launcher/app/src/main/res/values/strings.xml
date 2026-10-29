@@ -112,6 +112,9 @@
     <string name="side_all_settings">All settings</string>
     <string name="side_restart">Restart…</string>
     <string name="dock_state">Dock background: %1$s</string>
+    <string name="shelf_state">Top Shelf: %1$s</string>
+    <string name="wall_state">Wallpaper: %1$s</string>
+    <string name="wall_default">Theme default</string>
     <string name="dock_dark">Dark</string>
     <string name="dock_light">Light</string>
     <string name="dock_transparent">Transparent</string>

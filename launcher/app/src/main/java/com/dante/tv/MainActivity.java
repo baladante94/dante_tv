@@ -244,10 +244,18 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
         sourcePanelAction = cfg.sourcePanelAction;
 
         root = findViewById(R.id.root);
+        Config.walls(this);   // creates the walls folder (owned by the launcher) for wallpapers pushed over adb
         // Root paints every pixel, so the window's own black fill underneath is wasted work each frame;
         // so is the root colour under an opaque wallpaper.
         getWindow().setBackgroundDrawable(null);
-        if (safeMode || cfg.wallpaper == null || !showWallpaper(cfg.wallpaper)) root.setBackgroundColor(cfg.backgroundColor);
+        if (safeMode || cfg.wallpaper == null || !showWallpaper(cfg.wallpaper)) {
+            root.setBackgroundColor(cfg.backgroundColor);
+        } else if (cfg.eyes != null && cfg.eyes.length() > 0) {
+            // Living eyes: drawn over the wallpaper, under everything else.
+            eyesView = new EyesView(this, cfg.eyes, wallAspect, cfg.wallpaper.getParentFile());
+            root.addView(eyesView, 1, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT));
+        }
         sky = findViewById(R.id.sky);
         sky.setIntensity(safeMode ? 0 : cfg.skyIntensity);
         ambient = findViewById(R.id.ambient);
@@ -300,7 +308,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
         if (ShelfKey.token(this).isEmpty() && !cfg.tmdbToken.isEmpty()) ShelfKey.save(this, cfg.tmdbToken);
         tmdbToken = safeMode ? "" : ShelfKey.token(this);
         region = ShelfKey.region(this, cfg.region);
-        if (!tmdbToken.isEmpty()) {
+        // Launcher settings can switch the shelf off, to show the whole wallpaper; it then fetches nothing either.
+        boolean shelfOn = getSharedPreferences(Config.SETTINGS_NAME, MODE_PRIVATE).getBoolean("top_shelf", true);
+        if (!tmdbToken.isEmpty() && shelfOn) {
             // Under the menu's scrim and panel (scrim is not looked up yet, so find it here).
             shelf = new TopShelf(this, root, root.indexOfChild(findViewById(R.id.scrim)), this, animations);
             shelf.setItems(Trending.cached(this));
@@ -372,6 +382,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
     /** The wallpaper view (a GPU bitmap) and a small software copy of it for the Launchpad's snapshot. */
     private View wallView;
     private android.graphics.Bitmap wallSmall;
+    private float wallAspect = 16f / 9f;
+    private EyesView eyesView;
 
     private boolean showWallpaper(File file) {
         try {
@@ -381,6 +393,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
             android.graphics.BitmapFactory.decodeFile(file.getPath(), opts);
             int w = opts.outWidth, h = opts.outHeight;
             if (!WallpaperSize.accepted(w, h)) return false;
+            wallAspect = (float) w / h;
             int sample = WallpaperSize.sampleSize(w, h, dm.widthPixels, dm.heightPixels);
             opts.inJustDecodeBounds = false;
             opts.inSampleSize = sample;
@@ -447,6 +460,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
     protected void onStart() {
         super.onStart();
         stopped = false;
+        if (eyesView != null) eyesView.setActive(true);
         if (grid.getAdapter() == null) grid.setAdapter(adapter);   // dropped by onTrimMemory
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(timeReceiver, timeFilter, Context.RECEIVER_NOT_EXPORTED);
@@ -625,6 +639,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
     @Override
     protected void onStop() {
         super.onStop();
+        if (eyesView != null) eyesView.setActive(false);
         unregisterReceiver(timeReceiver);
         handler.removeCallbacks(clockCheck);
         stopped = true;
@@ -670,6 +685,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
         // Tile rect in root coordinates, using layout positions (ignores the scale animation).
         Rect r = new Rect(0, 0, card.getWidth(), card.getHeight());
         root.offsetDescendantRectToMyCoords(card, r);
+        if (eyesView != null) eyesView.lookAt(r.exactCenterX(), r.exactCenterY());
         float pad = 8f * density;        // room for the lifted tile's zoom and shadow
         if (shelf != null) {
             shelf.setShown(position < COLUMNS);
@@ -1153,6 +1169,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
     private void expandMenu() {
         if (menuOpen) return;
         menuOpen = true;
+        if (eyesView != null) eyesView.lookAt(0f, root.getHeight() / 2f);   // the rail opened: a look left
         hideHero();
         long d = animations ? (reducedMotion ? 120 : 260) : 0;
         android.view.animation.Interpolator ease = new android.view.animation.DecelerateInterpolator(1.8f);

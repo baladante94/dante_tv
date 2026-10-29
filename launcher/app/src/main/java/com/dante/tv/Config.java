@@ -67,13 +67,15 @@ final class Config {
     final String region;
     /** Whether the overlay file was present and parsed. */
     final boolean overlayApplied;
+    /** Living eyes painted out of the wallpaper (EyesView), or null: a theme's config.json "eyes". */
+    final org.json.JSONArray eyes;
 
     private Config(List<String> dockApps, List<String> hiddenApps, String liveTvPackage, String liveTvAction,
                    String sourcePanelService, String sourcePanelAction, String inputAction,
                    int columns, int rowsBelowDock, boolean animations, boolean advancedEffects,
                    boolean shamsiDate, boolean moduleCards, boolean reducedMotion, String vpnApp,
                    boolean showHomeSettingsShortcut, int backgroundColor, int skyIntensity,
-                   File wallpaper, String tmdbToken, String region, boolean overlayApplied) {
+                   File wallpaper, String tmdbToken, String region, boolean overlayApplied, org.json.JSONArray eyes) {
         this.dockApps = Collections.unmodifiableList(dockApps);
         this.hiddenApps = Collections.unmodifiableList(hiddenApps);
         this.liveTvPackage = liveTvPackage;
@@ -96,6 +98,7 @@ final class Config {
         this.tmdbToken = tmdbToken;
         this.region = region;
         this.overlayApplied = overlayApplied;
+        this.eyes = eyes;
     }
 
     /** The folder the theme tools push into; null when external storage is unavailable. */
@@ -167,11 +170,55 @@ final class Config {
         if (wallpaper != null && !(wallpaper.isFile() && wallpaper.length() > 0)) wallpaper = null;
         // A theme can also switch the wallpaper off while the file is still there.
         if (json != null && json.has("wallpaper") && !bool(json, "wallpaper", true)) wallpaper = null;
+        org.json.JSONArray eyes = wallpaper != null && json != null ? json.optJSONArray("eyes") : null;
+        // A wallpaper picked in Launcher settings, from the walls folder; its own <name>.json may carry living
+        // eyes and a sky intensity (0 shows the picture untinted).
+        String pick = choices.getString(WALLPAPER_PICK, "");
+        File picked = pick.isEmpty() ? null : wallFile(ctx, pick);
+        if (picked != null) {
+            wallpaper = picked;
+            JSONObject meta = read(new File(picked.getParentFile(), pick + ".json"));
+            eyes = meta != null ? meta.optJSONArray("eyes") : null;
+            if (meta != null) skyIntensity = integer(meta, "sky_intensity", skyIntensity, 0, 100);
+        }
 
         return new Config(dock, hidden, liveTv, liveTvAction, panelService, panelAction, inputAction,
                 Math.max(1, columns), Math.max(0, rowsBelow), animations, advancedEffects,
                 shamsi, moduleCards, reducedMotion, vpn, homeSettings, background,
-                Math.max(0, Math.min(100, skyIntensity)), wallpaper, tmdbToken, region, applied);
+                Math.max(0, Math.min(100, skyIntensity)), wallpaper, tmdbToken, region, applied,
+                eyes);
+    }
+
+    static final String WALLPAPER_PICK = "wallpaper_pick";
+
+    /** Wallpapers to choose from in Launcher settings: walls/<name>.jpg (or .png) in the theme folder, by name. */
+    static List<String> walls(Context ctx) {
+        List<String> names = new ArrayList<>();
+        File dir = dir(ctx);
+        File walls = dir == null ? null : new File(dir, "walls");
+        // Made by the launcher, so it owns the folder: one made over adb belongs to the shell and cannot be listed.
+        if (walls != null && !walls.isDirectory() && !walls.mkdirs()) walls = null;
+        File[] files = walls == null ? null : walls.listFiles();
+        if (files == null) return names;
+        for (File f : files) {
+            String n = f.getName();
+            int dot = n.lastIndexOf('.');
+            if (dot <= 0 || !f.isFile() || f.length() == 0) continue;
+            String ext = n.substring(dot + 1).toLowerCase(java.util.Locale.ROOT);
+            if (ext.equals("jpg") || ext.equals("jpeg") || ext.equals("png")) names.add(n.substring(0, dot));
+        }
+        Collections.sort(names, String.CASE_INSENSITIVE_ORDER);
+        return names;
+    }
+
+    private static File wallFile(Context ctx, String name) {
+        File dir = dir(ctx);
+        if (dir == null) return null;
+        for (String ext : new String[]{".jpg", ".jpeg", ".png"}) {
+            File f = new File(new File(dir, "walls"), name + ext);
+            if (f.isFile() && f.length() > 0) return f;
+        }
+        return null;
     }
 
     private static void syncThemeChoices(SharedPreferences choices, File dir, File config) {

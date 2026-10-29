@@ -18,6 +18,8 @@ public final class LauncherSettingsActivity extends Activity {
     private TextView advancedChoice;
     private TextView followThemeChoice;
     private TextView dockChoice;
+    private TextView shelfChoice;
+    private TextView wallChoice;
     private int columns;
     private boolean animations;
     private boolean advancedEffects;
@@ -73,6 +75,22 @@ public final class LauncherSettingsActivity extends Activity {
             changed();
             refresh();
         });
+        shelfChoice = findViewById(R.id.shelfChoice);
+        shelfChoice.setOnClickListener(v -> {
+            choices.edit().putBoolean("top_shelf", !choices.getBoolean("top_shelf", true)).apply();
+            changed();
+            refresh();
+        });
+        wallChoice = findViewById(R.id.wallChoice);
+        wallChoice.setOnClickListener(v -> {
+            // Theme default, then each picture in the walls folder, round and round.
+            java.util.List<String> walls = Config.walls(this);
+            int at = walls.indexOf(choices.getString(Config.WALLPAPER_PICK, ""));
+            String next = at + 1 < walls.size() ? walls.get(at + 1) : "";
+            choices.edit().putString(Config.WALLPAPER_PICK, next).apply();
+            changed();
+            refresh();
+        });
         followThemeChoice = findViewById(R.id.followThemeChoice);
         followThemeChoice.setOnClickListener(v -> {
             if (!hasOnTvChoices()) return;
@@ -125,6 +143,12 @@ public final class LauncherSettingsActivity extends Activity {
         followThemeChoice.setSelected(!hasOnTvChoices());
         int[] names = {R.string.dock_dark, R.string.dock_light, R.string.dock_transparent};
         dockChoice.setText(getString(R.string.dock_state, getString(names[DockDecoration.style(this)])));
+        String wall = choices.getString(Config.WALLPAPER_PICK, "");
+        if (!Config.walls(this).contains(wall)) wall = "";
+        wallChoice.setText(getString(R.string.wall_state, wall.isEmpty() ? getString(R.string.wall_default)
+                : Character.toUpperCase(wall.charAt(0)) + wall.substring(1).replace('-', ' ')));
+        shelfChoice.setText(getString(R.string.shelf_state,
+                getString(choices.getBoolean("top_shelf", true) ? R.string.on : R.string.off)));
     }
 
     private boolean hasOnTvChoices() {
