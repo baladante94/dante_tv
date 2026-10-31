@@ -11,7 +11,8 @@ import android.widget.ImageView;
 import java.util.Random;
 
 /**
- * Screensaver: the launcher's thin clock and date over the theme's wallpaper (dimmed) and a slow ambient glow,
+ * Screensaver: the launcher's thin clock and date over the theme's wallpaper (dimmed, with its eyes and lightning)
+ * and a slow ambient glow.
  * Every minute the clock drifts to a new spot and the glow shifts
  * colour, so nothing burns in. No network: cheap enough for a 1 GB TV.
  */
@@ -24,6 +25,8 @@ public class ClockDream extends DreamService {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Random random = new Random();
     private View content;
+    private EyesView eyes;
+    private LightningView lightning;
     private GradientDrawable glow;
     private int colorIndex;
     private int glowColor;
@@ -54,6 +57,22 @@ public class ClockDream extends DreamService {
                 ImageView w = findViewById(R.id.dreamWallpaper);
                 w.setImageBitmap(wall);
                 w.setVisibility(View.VISIBLE);
+                android.view.ViewGroup root = (android.view.ViewGroup) w.getParent();
+                float aspect = wall.getWidth() / (float) wall.getHeight();
+                int at = root.indexOfChild(w) + 1;
+                if (cfg.lightning != null) {
+                    lightning = new LightningView(this, cfg.lightning, aspect, cfg.wallpaper.getParentFile());
+                    lightning.setAlpha(w.getAlpha());
+                    root.addView(lightning, at++, new android.widget.FrameLayout.LayoutParams(
+                            android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.MATCH_PARENT));
+                }
+                if (cfg.eyes != null && cfg.eyes.length() > 0) {
+                    // The wallpaper's eyes are painted out for EyesView: put them back, dimmed like the picture.
+                    eyes = new EyesView(this, cfg.eyes, aspect, cfg.wallpaper.getParentFile());
+                    eyes.setAlpha(w.getAlpha());
+                    root.addView(eyes, at, new android.widget.FrameLayout.LayoutParams(
+                            android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.MATCH_PARENT));
+                }
             }
         }
         View ambient = findViewById(R.id.dreamAmbient);
@@ -75,10 +94,14 @@ public class ClockDream extends DreamService {
             content.animate().alpha(1f).setDuration(1200).start();
         });
         handler.postDelayed(tick, MOVE_MS);
+        if (eyes != null) eyes.setActive(true);
+        if (lightning != null) lightning.setActive(true);
     }
 
     @Override
     public void onDreamingStopped() {
+        if (eyes != null) eyes.setActive(false);
+        if (lightning != null) lightning.setActive(false);
         handler.removeCallbacks(tick);
         cancelGlowSteps();
         super.onDreamingStopped();

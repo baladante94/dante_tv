@@ -51,7 +51,7 @@ import java.util.Set;
 final class SidePanel {
 
     private static final int[] SLEEP_STEPS = {0, 15, 30, 60, 90};
-    private static final int MAIN = 0, WIFI = 1, BLUETOOTH = 2, INPUTS = 3, MEMC = 4, LIGHTS = 5;
+    private static final int MAIN = 0, WIFI = 1, BLUETOOTH = 2, INPUTS = 3, MEMC = 4, LIGHTS = 5, VPN = 6;
 
     private final Context ctx;
     private final WindowManager wm;
@@ -61,7 +61,7 @@ final class SidePanel {
     private View panel, scrim;
     private LinearLayout rows;
     private TextView title;
-    private int page = MAIN;
+    private int page = MAIN, vpnRow;
     private BroadcastReceiver wifiReceiver;
     private BluetoothA2dp a2dp;
     /** Package of the settings screen the panel last opened, so the next Settings press can back out of it. */
@@ -98,7 +98,7 @@ final class SidePanel {
                 boolean left = code == KeyEvent.KEYCODE_DPAD_LEFT;
                 if (code == KeyEvent.KEYCODE_BACK || left && (page != MAIN || !hasFocusOnRow())) {
                     if (e.getAction() == KeyEvent.ACTION_UP) {
-                        if (page != MAIN) showMain(page == MEMC ? 4 : page == LIGHTS ? lightsRow() : page - 1);
+                        if (page != MAIN) showMain(page == MEMC ? 4 : page == LIGHTS ? lightsRow() : page == VPN ? vpnRow : page - 1);
                         else close();
                     }
                     return true;
@@ -167,8 +167,8 @@ final class SidePanel {
         addRow(R.drawable.ic_picture, ctx.getString(R.string.side_picture), null, v -> go(new Intent(Settings.ACTION_DISPLAY_SETTINGS)));
         // The TV's live value would need its Picture screens opened; this is the last value set from here.
         if (hasMemc()) addRow(R.drawable.ic_picture, "MEMC", memcSet(), v -> showMemc(0));
-        // Only where a Magic Home controller answers on this network (Lights looks at start-up and on Wi-Fi changes).
-        if (Lights.get(ctx).reachable()) addRow(R.drawable.ic_bulb, ctx.getString(R.string.lights), lightsMode(), v -> showLights(0));
+        // Once either light is known, on any network: the page says if the strip isn't on this Wi-Fi.
+        if (Lights.get(ctx).found()) addRow(R.drawable.ic_bulb, ctx.getString(R.string.lights), null, v -> showLights(0));
         // The TV's own Sound screen; the general sound link opens Display & Sound at picture and scaling.
         addRow(R.drawable.ic_sound, ctx.getString(R.string.side_sound), null, v -> {
             Intent sound = new Intent("com.android.tv.action.VIEW_SOUND_SETTINGS");
@@ -197,6 +197,12 @@ final class SidePanel {
             ((TextView) opt.findViewById(R.id.sideStatus)).setText(optimizeResult[1]);
             optimizeResult = null;
         }
+        // Only with config files on the TV.
+        if (!Vpn.get(ctx).places().isEmpty()) {
+            vpnRow = rows.getChildCount();
+            String place = Vpn.get(ctx).current();
+            addRow(R.drawable.ic_shield, ctx.getString(R.string.vpn), place != null ? place : ctx.getString(R.string.off), v -> showVpn(0));
+        }
         // An app may not restart the TV (REBOOT is a system permission); the key service opens the TV's own power
         // menu instead, where the TV asks before it acts (CleanYourTV #1772).
         if (ctx instanceof android.accessibilityservice.AccessibilityService) {
@@ -208,6 +214,36 @@ final class SidePanel {
         }
         addRow(R.drawable.ic_settings, ctx.getString(R.string.side_all_settings), null, v -> go(new Intent(Settings.ACTION_SETTINGS)));
         focusRow(focus);
+    }
+
+    private void showVpn(int focus) {
+        Vpn vpn = Vpn.get(ctx);
+        openPage(VPN, R.string.vpn);
+        String current = vpn.current();
+        addRow(R.drawable.ic_shield, ctx.getString(R.string.off), current == null ? "\u2713" : null, null);
+        for (String place : vpn.places()) addRow(R.drawable.ic_shield, place, place.equals(current) ? "\u2713" : null, null);
+        for (int i = 0; i < rows.getChildCount(); i++) {
+            int at = i;
+            View row = rows.getChildAt(i);
+            row.setOnClickListener(v -> chooseVpn(at == 0 ? null : vpn.places().get(at - 1), at, row));
+        }
+        focusRow(focus);
+    }
+
+    private void chooseVpn(String place, int at, View row) {
+        Vpn vpn = Vpn.get(ctx);
+        if (vpn.busy()) return;
+        if (place != null && android.net.VpnService.prepare(ctx) != null) {
+            close();
+            ctx.startActivity(new Intent(ctx, VpnConsentActivity.class)
+                    .putExtra(VpnConsentActivity.PLACE, place).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            return;
+        }
+        ((TextView) row.findViewById(R.id.sideStatus)).setText(R.string.vpn_connecting);
+        vpn.set(place, (current, failed) -> {
+            if (failed) Toast.makeText(ctx, R.string.vpn_failed, Toast.LENGTH_LONG).show();
+            if (window != null && page == VPN) showVpn(at);
+        });
     }
 
     // ---- Optimize ----------------------------------------------------------------------------------
@@ -253,7 +289,7 @@ final class SidePanel {
                         : ctx.getString(R.string.optimize_nothing),
                 ctx.getString(R.string.optimize_free_now, android.text.format.Formatter.formatShortFileSize(ctx, now.availMem),
                         android.text.format.Formatter.formatShortFileSize(ctx, now.totalMem))};
-        int row = lightsRow() + (Lights.get(ctx).reachable() ? 3 : 2);
+        int row = lightsRow() + (Lights.get(ctx).found() ? 3 : 2);
         if (window != null) showMain(row);
         else open(row);
     }
@@ -266,82 +302,124 @@ final class SidePanel {
         return hasMemc() ? 5 : 4;
     }
 
-    private String lightsMode() {
-        switch (Lights.get(ctx).mode()) {
-            case Lights.OFF: return ctx.getString(R.string.lights_off);
+    private String modeName(int mode) {
+        switch (mode) {
             case Lights.STATIC: return ctx.getString(R.string.lights_static);
             case Lights.SOUND: return ctx.getString(R.string.lights_sound);
-            default: return null;
+            default: return ctx.getString(R.string.lights_off);
         }
     }
 
+    private static int nextMode(int mode) {
+        return mode == Lights.STATIC ? Lights.SOUND : mode == Lights.SOUND ? Lights.OFF : Lights.STATIC;
+    }
+
+    private static int nextOf(int[] values, int value) {
+        for (int i = 0; i < values.length; i++) if (values[i] == value) return values[(i + 1) % values.length];
+        return values[0];
+    }
+
+    private void addColourRow(int value, View.OnClickListener click) {
+        int at = 0;
+        for (int i = 0; i < Lights.COLOURS.length; i++) if (Lights.COLOURS[i] == value) at = i;
+        View row = addRow(R.drawable.ic_bulb, ctx.getString(R.string.lights_colour), COLOUR_NAMES[at], click);
+        if (value != Lights.RAINBOW) ((ImageView) row.findViewById(R.id.sideIcon)).setColorFilter(value);
+    }
+
+    private void addSection(int label) {
+        TextView head = new TextView(ctx);
+        head.setText(label);
+        head.setTextColor(0x99FFFFFF);
+        head.setTextSize(12);
+        head.setPadding((int) (16 * density), (int) (10 * density), (int) (16 * density), (int) (4 * density));
+        rows.addView(head);
+    }
+
+    /** Two sections with their own settings: the Wi-Fi strip works on its own network, the neon pipe on any. */
     private void showLights(int focus) {
         Lights lights = Lights.get(ctx);
         openPage(LIGHTS, R.string.lights);
-        String mode = lightsMode();
-        addRow(R.drawable.ic_bulb, ctx.getString(R.string.lights_mode), mode == null ? ctx.getString(R.string.lights_off) : mode, v -> {
-            int next = lights.mode() == Lights.STATIC ? Lights.SOUND : lights.mode() == Lights.SOUND ? Lights.OFF : Lights.STATIC;
-            if (next == Lights.SOUND && !Lights.audioAllowed(ctx)) Toast.makeText(ctx, R.string.lights_mic, Toast.LENGTH_LONG).show();
-            lights.setMode(next);
-            showLights(0);
-        });
-        int at = 0;
-        for (int i = 0; i < Lights.COLOURS.length; i++) if (Lights.COLOURS[i] == lights.colour()) at = i;
-        final int colourAt = at;
-        View colour = addRow(R.drawable.ic_bulb, ctx.getString(R.string.lights_colour), COLOUR_NAMES[at], v -> {
-            lights.setColour(Lights.COLOURS[(colourAt + 1) % Lights.COLOURS.length]);
-            showLights(1);
-        });
-        if (lights.colour() != Lights.RAINBOW) ((ImageView) colour.findViewById(R.id.sideIcon)).setColorFilter(lights.colour());
-        int b = 0;
-        for (int i = 0; i < Lights.BRIGHTNESS.length; i++) if (Lights.BRIGHTNESS[i] == lights.brightness()) b = i;
-        final int brightAt = b;
-        addRow(R.drawable.ic_bulb, ctx.getString(R.string.lights_brightness), lights.brightness() + "%", v -> {
-            lights.setBrightness(Lights.BRIGHTNESS[(brightAt + 1) % Lights.BRIGHTNESS.length]);
-            showLights(2);
-        });
-        // The Bluetooth controller's own music effects, unlabelled by the maker: stepped through on the strip itself.
-        if (lights.mode() == Lights.SOUND && lights.bleConnected()) {
-            int effect = lights.bleEffect();
-            addRow(R.drawable.ic_sound, ctx.getString(R.string.lights_effect), (effect + 1) + " / " + BleLight.EFFECTS, v -> {
-                lights.setBleEffect((effect + 1) % BleLight.EFFECTS);
-                showLights(3);
+        addSection(R.string.lights_strip);
+        if (lights.wifi()) {
+            addRow(R.drawable.ic_bulb, ctx.getString(R.string.lights_mode), modeName(lights.mode()), v -> {
+                int next = nextMode(lights.mode());
+                if (next == Lights.SOUND && !Lights.audioAllowed(ctx)) Toast.makeText(ctx, R.string.lights_mic, Toast.LENGTH_LONG).show();
+                lights.setMode(next);
+                showLights(focusedRow());
             });
-            int sens = lights.bleSensitivity(), s = 0;
-            for (int i = 0; i < BleLight.SENSITIVITY.length; i++) if (BleLight.SENSITIVITY[i] == sens) s = i;
-            final int sensAt = s;
-            addRow(R.drawable.ic_sound, ctx.getString(R.string.lights_sensitivity), sens + "%", v -> {
-                lights.setBleSensitivity(BleLight.SENSITIVITY[(sensAt + 1) % BleLight.SENSITIVITY.length]);
-                showLights(4);
+            addColourRow(lights.colour(), v -> {
+                lights.setColour(nextOf(Lights.COLOURS, lights.colour()));
+                showLights(focusedRow());
+            });
+            addRow(R.drawable.ic_bulb, ctx.getString(R.string.lights_brightness), lights.brightness() + "%", v -> {
+                lights.setBrightness(nextOf(Lights.BRIGHTNESS, lights.brightness()));
+                showLights(focusedRow());
             });
         }
-        View find = addRow(R.drawable.ic_wifi, ctx.getString(R.string.lights_find), lightsAddress(), null);
-        find.setOnClickListener(v -> findLights(find));
+        View findStrip = addRow(R.drawable.ic_wifi, ctx.getString(R.string.lights_find), stripStatus(), null);
+        findStrip.setOnClickListener(v -> findStrip(findStrip));
+
+        addSection(R.string.lights_neon);
+        if (lights.bleName() != null) {
+            addRow(R.drawable.ic_bulb, ctx.getString(R.string.lights_mode), modeName(lights.neonMode()), v -> {
+                lights.setNeonMode(nextMode(lights.neonMode()));
+                showLights(focusedRow());
+            });
+            addColourRow(lights.neonColour(), v -> {
+                lights.setNeonColour(nextOf(Lights.COLOURS, lights.neonColour()));
+                showLights(focusedRow());
+            });
+            addRow(R.drawable.ic_bulb, ctx.getString(R.string.lights_brightness), lights.neonBrightness() + "%", v -> {
+                lights.setNeonBrightness(nextOf(Lights.BRIGHTNESS, lights.neonBrightness()));
+                showLights(focusedRow());
+            });
+            // The controller's own music effects, unlabelled by the maker: stepped through on the pipe itself.
+            if (lights.neonMode() == Lights.SOUND) {
+                int effect = lights.bleEffect();
+                addRow(R.drawable.ic_sound, ctx.getString(R.string.lights_effect), (effect + 1) + " / " + BleLight.EFFECTS, v -> {
+                    lights.setBleEffect((effect + 1) % BleLight.EFFECTS);
+                    showLights(focusedRow());
+                });
+                addRow(R.drawable.ic_sound, ctx.getString(R.string.lights_sensitivity), lights.bleSensitivity() + "%", v -> {
+                    lights.setBleSensitivity(nextOf(BleLight.SENSITIVITY, lights.bleSensitivity()));
+                    showLights(focusedRow());
+                });
+            }
+        }
+        View findNeon = addRow(R.drawable.ic_bluetooth, ctx.getString(R.string.lights_find), neonStatus(), null);
+        findNeon.setOnClickListener(v -> findNeon(findNeon));
         TextView note = new TextView(ctx);
         note.setText(R.string.lights_note);
         note.setTextColor(0x99FFFFFF);
         note.setTextSize(12);
         note.setPadding((int) (16 * density), (int) (10 * density), (int) (16 * density), 0);
         rows.addView(note);
-        focusRow(focus);
-        if (!lights.found()) findLights(find);
+        focusRow(Math.max(1, focus));
     }
 
-    private String lightsAddress() {
+    private String stripStatus() {
         Lights lights = Lights.get(ctx);
-        String ip = ctx.getSharedPreferences("lights", Context.MODE_PRIVATE).getString("ip", "");
-        String bt = lights.bleName();
-        if (ip.isEmpty() && bt == null) return ctx.getString(R.string.lights_not_found);
-        if (ip.isEmpty()) return bt;
-        String wifi = lights.reachable() ? ip : ctx.getString(R.string.lights_other_wifi);
-        return bt == null ? wifi : wifi + " · " + bt;
+        if (!lights.wifi()) return ctx.getString(R.string.lights_not_found);
+        return lights.reachable() ? ctx.getSharedPreferences("lights", Context.MODE_PRIVATE).getString("ip", "") : ctx.getString(R.string.lights_other_wifi);
     }
 
-    private void findLights(View row) {
-        TextView st = row.findViewById(R.id.sideStatus);
-        st.setText(R.string.lights_searching);
-        Lights.get(ctx).find(ok -> handler.post(() -> {
-            if (page == LIGHTS) st.setText(lightsAddress());
+    private String neonStatus() {
+        Lights lights = Lights.get(ctx);
+        if (lights.bleName() == null) return ctx.getString(R.string.lights_not_found);
+        return lights.bleConnected() ? lights.bleName() : ctx.getString(R.string.lights_not_connected);
+    }
+
+    private void findStrip(View row) {
+        ((TextView) row.findViewById(R.id.sideStatus)).setText(R.string.lights_searching);
+        Lights.get(ctx).findStrip(ok -> handler.post(() -> {
+            if (page == LIGHTS) showLights(focusedRow());
+        }));
+    }
+
+    private void findNeon(View row) {
+        ((TextView) row.findViewById(R.id.sideStatus)).setText(R.string.lights_searching);
+        Lights.get(ctx).findNeon(ok -> handler.post(() -> {
+            if (page == LIGHTS) showLights(focusedRow());
         }));
     }
 
@@ -510,6 +588,7 @@ final class SidePanel {
             go(new Intent(Settings.ACTION_WIFI_SETTINGS));
             return;
         }
+        Lights.get(ctx).beforeWifiChange();
         if (savedId != null && w.enableNetwork(savedId, true)) {
             Toast.makeText(ctx, ctx.getString(R.string.wifi_connecting, r.SSID), Toast.LENGTH_SHORT).show();
             return;

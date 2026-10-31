@@ -110,6 +110,9 @@
     <string name="side_picture">Picture</string>
     <string name="side_sound">Sound</string>
     <string name="side_all_settings">All settings</string>
+    <string name="vpn_connecting">Connecting…</string>
+    <string name="vpn_connected">VPN on</string>
+    <string name="vpn_failed">VPN server not answering</string>
     <string name="side_restart">Restart…</string>
     <string name="dock_state">Dock background: %1$s</string>
     <string name="shelf_state">Top Shelf: %1$s</string>
@@ -156,6 +159,9 @@
     <string name="setup_remove">Remove key</string>
     <string name="tmdb_credit">This product uses the TMDB API but is not endorsed or certified by TMDB.</string>
     <string name="lights">Lights</string>
+    <string name="lights_strip">Wi-Fi strip</string>
+    <string name="lights_neon">Neon pipe (Bluetooth)</string>
+    <string name="lights_not_connected">Not connected</string>
     <string name="lights_mode">Mode</string>
     <string name="lights_effect">Music effect</string>
     <string name="lights_sensitivity">Mic sensitivity</string>
@@ -168,6 +174,6 @@
     <string name="lights_off">Off</string>
     <string name="lights_static">Static</string>
     <string name="lights_sound">Sound</string>
-    <string name="lights_note">LED controllers on this Wi-Fi (Magic Home) or over Bluetooth (LotusLamp X). Lights follow the TV on and off. In Sound mode a Bluetooth controller listens with its own mic; a Magic Home strip follows the TV\'s mic, worked out on the TV, nothing recorded. The Rainbow colour goes through every hue.</string>
+    <string name="lights_note">Both follow the TV on and off. In Sound mode the neon pipe listens with its own mic; the Wi-Fi strip follows the TV\'s mic, worked out on the TV, nothing recorded.</string>
     <string name="lights_mic">Allow the microphone: adb shell pm grant com.dante.tv android.permission.RECORD_AUDIO</string>
 </resources>

@@ -57,9 +57,10 @@ final class RollingClock extends View {
                 previous = shown;
                 shown = t;
                 changedAt = SystemClock.uptimeMillis();
-                if (width(previous) != width(shown)) requestLayout();
                 postInvalidateOnAnimation();
             }
+            // Checked against the real size: the time also jumps on coming back to Home, between ticks.
+            if (measuredWidth(shown) != getMeasuredWidth()) requestLayout();
             postDelayed(this, 1000 - System.currentTimeMillis() % 1000 + 5);
         }
     };
@@ -98,11 +99,14 @@ final class RollingClock extends View {
         return w;
     }
 
+    private int measuredWidth(String t) {
+        return (int) Math.ceil(width(t) + 2);
+    }
+
     @Override
     protected void onMeasure(int wSpec, int hSpec) {
-        float w = width(shown);
         Paint.FontMetrics fm = big.getFontMetrics();
-        setMeasuredDimension((int) Math.ceil(w + 2), (int) Math.ceil(-fm.ascent + fm.descent * 0.3f));
+        setMeasuredDimension(measuredWidth(shown), (int) Math.ceil(-fm.ascent + fm.descent * 0.3f));
     }
 
     @Override

@@ -71,6 +71,8 @@ final class Config {
     final org.json.JSONArray eyes;
     /** Rain falling over a wallpaper painted in the rain (RainView), or null: a picked wall's json "rain". */
     final JSONObject rain;
+    /** A wallpaper that moves (LiveWallView), or null: a wall's json "live". */
+    final JSONObject live;
     /** Lightning behind the figure (LightningView), or null: a picked wall's json "lightning". */
     final JSONObject lightning;
 
@@ -80,7 +82,7 @@ final class Config {
                    boolean shamsiDate, boolean moduleCards, boolean reducedMotion, String vpnApp,
                    boolean showHomeSettingsShortcut, int backgroundColor, int skyIntensity,
                    File wallpaper, String tmdbToken, String region, boolean overlayApplied, org.json.JSONArray eyes,
-                   JSONObject rain, JSONObject lightning) {
+                   JSONObject rain, JSONObject lightning, JSONObject live) {
         this.dockApps = Collections.unmodifiableList(dockApps);
         this.hiddenApps = Collections.unmodifiableList(hiddenApps);
         this.liveTvPackage = liveTvPackage;
@@ -105,6 +107,7 @@ final class Config {
         this.overlayApplied = overlayApplied;
         this.eyes = eyes;
         this.rain = rain;
+        this.live = live;
         this.lightning = lightning;
     }
 
@@ -184,12 +187,14 @@ final class Config {
         File picked = pick.isEmpty() ? null : wallFile(ctx, pick);
         JSONObject rain = wallpaper != null && json != null ? json.optJSONObject("rain") : null;
         JSONObject lightning = wallpaper != null && json != null ? json.optJSONObject("lightning") : null;
+        JSONObject live = wallpaper != null && json != null ? json.optJSONObject("live") : null;
         if (picked != null) {
             wallpaper = picked;
             JSONObject meta = read(new File(picked.getParentFile(), pick + ".json"));
             eyes = meta != null ? meta.optJSONArray("eyes") : null;
             rain = meta != null ? meta.optJSONObject("rain") : null;
             lightning = meta != null ? meta.optJSONObject("lightning") : null;
+            live = meta != null ? meta.optJSONObject("live") : null;
             if (meta != null) skyIntensity = integer(meta, "sky_intensity", skyIntensity, 0, 100);
         }
 
@@ -197,7 +202,7 @@ final class Config {
                 Math.max(1, columns), Math.max(0, rowsBelow), animations, advancedEffects,
                 shamsi, moduleCards, reducedMotion, vpn, homeSettings, background,
                 Math.max(0, Math.min(100, skyIntensity)), wallpaper, tmdbToken, region, applied,
-                eyes, rain, lightning);
+                eyes, rain, lightning, live);
     }
 
     static final String WALLPAPER_PICK = "wallpaper_pick";
@@ -219,7 +224,7 @@ final class Config {
             int dot = n.lastIndexOf('.');
             if (dot <= 0 || !f.isFile() || f.length() == 0) continue;
             String ext = n.substring(dot + 1).toLowerCase(java.util.Locale.ROOT);
-            if (n.substring(0, dot).matches(".*-(eye|over)\\d+")) continue;
+            if (n.substring(0, dot).matches(".*-((eye|over)\\d+|sky|live)")) continue;
             if (ext.equals("jpg") || ext.equals("jpeg") || ext.equals("png")) names.add(n.substring(0, dot));
         }
         Collections.sort(names, String.CASE_INSENSITIVE_ORDER);

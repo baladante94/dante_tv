@@ -48,8 +48,11 @@ final class Lights {
     private final Context ctx;
     private final SharedPreferences prefs;
     private final Handler net;
+    /** The neon pipe's own thread, so a strip that doesn't answer (2 s connects) never holds it up. */
+    private final Handler neonNet;
     private Socket socket;
-    private boolean screenOn = true, started, playing;
+    private volatile boolean screenOn = true;
+    private boolean started, playing, leaving;
     private volatile boolean listening;
     private long lastRediscover, failedAt;
     /** False while the controller doesn't answer, as when the TV is on another router's Wi-Fi. */
@@ -67,7 +70,14 @@ final class Lights {
         HandlerThread t = new HandlerThread("lights");
         t.start();
         net = new Handler(t.getLooper());
-        ble = new BleLight(ctx, prefs, net, this::apply);
+        // The neon pipe starts from what both lights shared, then goes its own way.
+        if (!prefs.contains("ble_mode")) {
+            prefs.edit().putInt("ble_mode", mode()).putInt("ble_colour", colour()).putInt("ble_brightness", brightness()).apply();
+        }
+        HandlerThread n = new HandlerThread("lights-neon");
+        n.start();
+        neonNet = new Handler(n.getLooper());
+        ble = new BleLight(ctx, prefs, neonNet, this::applyNeon);
     }
 
     // ---- settings ----------------------------------------------------------------------------------
@@ -84,12 +94,24 @@ final class Lights {
         return prefs.getInt("brightness", 75);
     }
 
+    int neonMode() {
+        return prefs.getInt("ble_mode", UNSET);
+    }
+
+    int neonColour() {
+        return prefs.getInt("ble_colour", COLOURS[0]);
+    }
+
+    int neonBrightness() {
+        return prefs.getInt("ble_brightness", 75);
+    }
+
     boolean found() {
         return wifi() || ble.known();
     }
 
-    /** A Magic Home controller on the Wi-Fi; the Bluetooth one (BleLight) can be there too, or instead. */
-    private boolean wifi() {
+    /** A Magic Home controller remembered from the Wi-Fi; the Bluetooth one (BleLight) is separate. */
+    boolean wifi() {
         return !prefs.getString("ip", "").isEmpty();
     }
 
@@ -99,8 +121,8 @@ final class Lights {
 
     void setBleEffect(int effect) {
         prefs.edit().putInt("ble_effect", effect).apply();
-        net.post(() -> {
-            if (mode() == SOUND) ble.effect();
+        neonNet.post(() -> {
+            if (neonMode() == SOUND) ble.effect();
         });
     }
 
@@ -110,8 +132,8 @@ final class Lights {
 
     void setBleSensitivity(int percent) {
         prefs.edit().putInt("ble_sens", percent).apply();
-        net.post(() -> {
-            if (mode() == SOUND) ble.sensitivity();
+        neonNet.post(() -> {
+            if (neonMode() == SOUND) ble.sensitivity();
         });
     }
 
@@ -134,6 +156,21 @@ final class Lights {
         net.post(this::apply);
     }
 
+    void setNeonMode(int mode) {
+        prefs.edit().putInt("ble_mode", mode).apply();
+        neonNet.post(this::applyNeon);
+    }
+
+    void setNeonColour(int colour) {
+        prefs.edit().putInt("ble_colour", colour).apply();
+        neonNet.post(this::applyNeon);
+    }
+
+    void setNeonBrightness(int percent) {
+        prefs.edit().putInt("ble_brightness", percent).apply();
+        neonNet.post(this::applyNeon);
+    }
+
     static boolean audioAllowed(Context ctx) {
         return ctx.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED;
     }
@@ -151,6 +188,7 @@ final class Lights {
             public void onReceive(Context c, Intent i) {
                 screenOn = Intent.ACTION_SCREEN_ON.equals(i.getAction());
                 net.post(Lights.this::apply);
+                neonNet.post(Lights.this::applyNeon);
             }
         }, f);
         // A Wi-Fi change (the TV moving to a backup router and back): connect afresh and put the strip right at once.
@@ -172,16 +210,17 @@ final class Lights {
         }
         net.post(this::lookQuietly);
         net.postDelayed(recheck, 60_000);
-        net.post(() -> {
+        neonNet.post(() -> {
             if (ble.known()) ble.connect();
             else ble.scan(null);
         });
+        neonNet.post(this::applyNeon);
         net.post(this::apply);
     }
 
     /**
-     * One discovery message at start-up and on each Wi-Fi change: the panel shows Lights only on a network where a
-     * controller answers, and a new address from the router is picked up.
+     * One discovery message at start-up and on each Wi-Fi change: the panel says whether the strip answers on this
+     * network, and a new address from the router is picked up.
      */
     private void lookQuietly() {
         String[] f = discover();
@@ -214,7 +253,7 @@ final class Lights {
     };
 
     boolean reachable() {
-        return reachable || ble.connected();
+        return reachable;
     }
 
     /** Sound mode only: is something playing? Checked once a second while the screen is on; apply() starts it. */
@@ -235,52 +274,54 @@ final class Lights {
     /** Puts the strip in the state the mode, the screen and playback call for. Runs on the lights thread. */
     private void apply() {
         int mode = mode();
-        net.removeCallbacks(rainbow);
         net.removeCallbacks(watchPlayback);
         // The TV's mic only serves the Magic Home strip, and only while its controller answers.
         if (mode == SOUND && screenOn && wifi() && reachable) net.postDelayed(watchPlayback, 1000);
         else playing = false;
-        if (mode == UNSET || !found()) {
+        if (mode == UNSET || !wifi()) {
             stopListening();
             return;
         }
         if (mode == OFF || !screenOn) {
             stopListening();
-            if (wifi()) send(power(false));
+            send(power(false));
+            return;
+        }
+        send(power(true));
+        boolean steady = leaving || !(mode == SOUND && playing && audioAllowed(ctx));
+        if (reachable && !steady) startListening();
+        else stopListening();
+        if (steady) {
+            // The controller's own fade: it carries on when the TV moves to a Wi-Fi the strip isn't on.
+            if (colour() == RAINBOW) send(withSum(new byte[]{0x61, 0x25, 0x10, 0x0F}));
+            else send(colour(scaled(colour(), brightness() / 100f), true));
+        }
+    }
+
+    /** The neon pipe's state, whatever the strip and the Wi-Fi are doing. Runs on its own thread. */
+    private void applyNeon() {
+        int mode = neonMode();
+        neonNet.removeCallbacks(neonRainbow);
+        if (mode == UNSET || !ble.known()) return;
+        if (mode == OFF || !screenOn) {
             ble.power(false);
             return;
         }
-        if (wifi()) send(power(true));
         ble.power(true);
-        ble.brightness(brightness());
-        if (mode == SOUND) ble.sound(true);   // the Bluetooth controller listens with its own mic, playing or not
-        boolean steadyWifi = !(mode == SOUND && playing && audioAllowed(ctx));
-        if (wifi() && reachable && !steadyWifi) startListening();
-        else stopListening();
-        if (steadyWifi || mode != SOUND) {
-            if (colour() == RAINBOW) net.post(rainbow);
-            else out(colour(), true);
-        }
+        ble.brightness(neonBrightness());
+        if (mode == SOUND) ble.sound(true);   // it listens with its own mic, playing or not
+        else if (neonColour() == RAINBOW) neonNet.post(neonRainbow);
+        else ble.colour(neonColour());
     }
 
-    /**
-     * A full-brightness colour to every controller there is: the Magic Home one gets it dimmed to the brightness setting,
-     * the Bluetooth one has its own brightness command. In Sound mode the Bluetooth one keeps its own music effect.
-     */
-    private void out(int c, boolean keep) {
-        if (wifi()) send(colour(scaled(c, brightness() / 100f), keep));
-        if (mode() != SOUND) ble.colour(c);
-    }
+    private float neonHue;
 
-    private float rainbowHue;
-
-    /** About 18 s around the colour wheel, ten steps a second. */
-    private final Runnable rainbow = new Runnable() {
+    private final Runnable neonRainbow = new Runnable() {
         @Override
         public void run() {
-            rainbowHue = (rainbowHue + 2) % 360;
-            out(Color.HSVToColor(new float[]{rainbowHue, 1f, 1f}), false);
-            net.postDelayed(this, 100);
+            neonHue = (neonHue + 2) % 360;
+            ble.colour(Color.HSVToColor(new float[]{neonHue, 1f, 1f}));
+            neonNet.postDelayed(this, 100);
         }
     };
 
@@ -471,21 +512,45 @@ final class Lights {
         }
     }
 
-    /** Looks for both kinds of controller now (Wi-Fi at once, Bluetooth for 6 s); done gets true when one answered. */
-    void find(java.util.function.Consumer<Boolean> done) {
+    /**
+     * Before the TV joins another Wi-Fi: the strip won't hear from it there, so it stops following the mic and is left
+     * on its own fade rather than frozen on the last colour. Waits briefly so the message goes out on this network.
+     */
+    void beforeWifiChange() {
+        java.util.concurrent.CountDownLatch sent = new java.util.concurrent.CountDownLatch(1);
+        net.post(() -> {
+            leaving = true;
+            if (reachable) apply();
+            sent.countDown();
+            net.postDelayed(() -> {
+                leaving = false;
+                apply();
+            }, 30_000);
+        });
+        try {
+            sent.await(400, java.util.concurrent.TimeUnit.MILLISECONDS);
+        } catch (InterruptedException ignored) {
+        }
+    }
+
+    /** Looks for the strip on this Wi-Fi now; done gets true when it answered. */
+    void findStrip(java.util.function.Consumer<Boolean> done) {
         net.post(() -> {
             String[] f = discover();
+            reachable = f != null;
             if (f != null) {
                 prefs.edit().putString("ip", f[0]).putString("mac", f[1]).apply();
-                reachable = true;
                 closeSocket();
                 failedAt = 0;
                 apply();
             }
-            ble.scan(ok -> {
-                if (done != null) done.accept(f != null || ok);
-            });
+            done.accept(f != null);
         });
+    }
+
+    /** Looks for the neon pipe over Bluetooth for 6 s; done gets true when it was found. */
+    void findNeon(java.util.function.Consumer<Boolean> done) {
+        neonNet.post(() -> ble.scan(done));
     }
 
     private static byte[] power(boolean on) {

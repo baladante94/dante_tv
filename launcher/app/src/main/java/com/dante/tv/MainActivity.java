@@ -269,6 +269,14 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
                 root.addView(rainView, over, new FrameLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
             }
+            if (cfg.live != null) {
+                // Just over the still picture, under the lightning and eyes.
+                liveWall = new LiveWallView(this, cfg.live, wallBitmap, wallAspect, cfg.wallpaper.getParentFile());
+                root.addView(liveWall, 1, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT));
+                // The still picture under it would only be painted and cleared on every frame of the window.
+                wallView.setVisibility(View.GONE);
+            }
         }
         sky = findViewById(R.id.sky);
         sky.setIntensity(safeMode ? 0 : cfg.skyIntensity);
@@ -324,7 +332,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
         }
         grid.setAdapter(adapter(cfg));
         launchpad = new Launchpad(this, root, adapter, animations);
-        launchpad.setWallpaper(wallView, wallSmall);
+        // Launchpad covers the wall with its own backdrop: hiding the live one stops it until Launchpad closes.
+        launchpad.setWallpaper(liveWall != null ? liveWall : wallView, wallSmall);
         // A key from an older theme file moves into the launcher's own storage once.
         if (ShelfKey.token(this).isEmpty() && !cfg.tmdbToken.isEmpty()) ShelfKey.save(this, cfg.tmdbToken);
         tmdbToken = safeMode ? "" : ShelfKey.token(this);
@@ -406,6 +415,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
     private float wallAspect = 16f / 9f;
     private EyesView eyesView;
     private RainView rainView;
+    private LiveWallView liveWall;
+    private android.graphics.Bitmap wallBitmap;
     private LightningView lightningView;
 
     private boolean showWallpaper(File file) {
@@ -441,6 +452,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
             android.widget.ImageView wall = new android.widget.ImageView(this);
             wall.setScaleType(android.widget.ImageView.ScaleType.CENTER_CROP);
             wall.setImageBitmap(bmp);
+            wallBitmap = bmp;
             wallView = wall;
             root.addView(wall, 0, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
             return true;
@@ -485,6 +497,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
         stopped = false;
         if (eyesView != null) eyesView.setActive(true);
         if (rainView != null) rainView.setActive(true);
+        if (liveWall != null) liveWall.setActive(true);
         if (lightningView != null) lightningView.setActive(true);
         if (grid.getAdapter() == null) grid.setAdapter(adapter);   // dropped by onTrimMemory
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -666,6 +679,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
         super.onStop();
         if (eyesView != null) eyesView.setActive(false);
         if (rainView != null) rainView.setActive(false);
+        if (liveWall != null) liveWall.setActive(false);
         if (lightningView != null) lightningView.setActive(false);
         unregisterReceiver(timeReceiver);
         handler.removeCallbacks(clockCheck);
@@ -713,6 +727,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
         Rect r = new Rect(0, 0, card.getWidth(), card.getHeight());
         root.offsetDescendantRectToMyCoords(card, r);
         if (eyesView != null) eyesView.lookAt(r.exactCenterX(), r.exactCenterY());
+        if (liveWall != null) liveWall.lookAt(r.exactCenterX());
         float pad = 8f * density;        // room for the lifted tile's zoom and shadow
         if (shelf != null) {
             shelf.setShown(position < COLUMNS);
@@ -1197,6 +1212,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
         if (menuOpen) return;
         menuOpen = true;
         if (eyesView != null) eyesView.lookAt(0f, root.getHeight() / 2f);   // the rail opened: a look left
+        if (liveWall != null) liveWall.lookAt(0f);
         hideHero();
         long d = animations ? (reducedMotion ? 120 : 260) : 0;
         android.view.animation.Interpolator ease = new android.view.animation.DecelerateInterpolator(1.8f);
@@ -1737,6 +1753,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
             return;
         }
         // A saved network joins without asking; one saved by Settings may refuse us, so then ask for its password.
+        Lights.get(this).beforeWifiChange();
         if (savedId != null && wm.enableNetwork(savedId, true)) {
             watchJoin(wm, r.SSID);
             return;
@@ -1815,6 +1832,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, T
             c.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.WPA_PSK);
             c.preSharedKey = "\"" + key + "\"";
         }
+        Lights.get(this).beforeWifiChange();
         int id = wm.addNetwork(c);
         if (id == -1 || !wm.enableNetwork(id, true)) {
             Toast.makeText(this, getString(R.string.wifi_failed, r.SSID), Toast.LENGTH_LONG).show();

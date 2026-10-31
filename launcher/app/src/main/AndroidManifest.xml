@@ -127,6 +127,11 @@
         <receiver
             android:name=".SleepReceiver"
             android:exported="false" />
+        <activity
+            android:name=".VpnConsentActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
         <service
             android:name=".OptimizeService"
             android:exported="false"
